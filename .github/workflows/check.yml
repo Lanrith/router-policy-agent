@@ -30,6 +30,9 @@ jobs:
         run: |
           go mod verify
           go mod tidy
+          # Packaging records notices for the complete locked graph, including modules
+          # outside the Linux build. Keep its authenticated checksums in source too.
+          go mod download all
           git diff --exit-code
       - name: Formatting
         if: matrix.go == '1.27.2'
