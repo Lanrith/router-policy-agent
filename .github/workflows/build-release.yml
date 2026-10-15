@@ -1,0 +1,88 @@
+name: Qualified component build
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  qualify:
+    uses: ./.github/workflows/check.yml
+  build:
+    needs: qualify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Build and scan exact packages
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 packaging/release.py --version "$RELEASE_VERSION" --output dist/release
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualified-release
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 7
+  attest:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release
+          merge-multiple: true
+      # This fresh runner never executes the downloaded artifacts or source.
+      - id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/*
+      - name: Keep offline verification bundles beside each subject
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          for file in release/*; do cp "$BUNDLE" "$file.intoto.jsonl"; done
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: attested-release
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: attest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.attest.outputs.artifact-id }}
+          path: release
+          merge-multiple: true
+      - name: Publish immutable qualified assets
+        run: |
+          gh release create "v$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Lanrith Policy Agent $RELEASE_VERSION" --generate-notes release/*
