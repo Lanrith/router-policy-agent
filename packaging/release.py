@@ -37,6 +37,10 @@ def main():
                 'router-policy-reader': ['router-policy-reader'],
                 'router-policy-collector': ['router-policy-collector']}
     scan = args.output/'security.txt'
+    notices = args.output/'THIRD-PARTY-NOTICES'
+    run('go', 'mod', 'download', 'all')
+    run('go', 'mod', 'verify')
+    run('python3', 'packaging/collect-notices.py', 'go', '--output', str(notices))
     with scan.open('w') as stream:
         stream.write('source_commit='+source+'\nversion='+args.version+'\n')
         stream.write('assessed_at='+datetime.datetime.now(datetime.timezone.utc).isoformat()+'\n')
@@ -60,6 +64,7 @@ def main():
                     if observed != args.version:
                         raise ValueError('Binary version does not match release')
                 shutil.copyfile('LICENSE', root/('usr/share/doc/'+package+'/copyright'))
+                shutil.copyfile(notices, root/('usr/share/doc/'+package+'/THIRD-PARTY-NOTICES'))
                 (root/'DEBIAN/control').write_text(
                     f'Package: {package}\nVersion: {args.version}\nArchitecture: amd64\n'
                     'Section: net\nPriority: optional\nMaintainer: Lanrith <maintainers@lanrith.org>\n'
