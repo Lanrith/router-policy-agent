@@ -152,16 +152,3 @@ func (layout *guardLayout) translatedTagDrops() ([]string, [][]any) {
 	}
 	return lines, rules
 }
-
-// The router owner must place these provisional accepts after every protected
-// and retained deny, before controller-address terminal drops, with late guards
-// active. No executable installs the bridge or authenticates that ordering.
-func (layout *guardLayout) translatedBridgeRules() []string {
-	lines := []string{}
-	if len(layout.translationPaths) != 0 {
-		for _, tag := range []string{translatedOriginalTag, translatedReplyTag} {
-			lines = append(lines, "meta mark & 0xff000000 == "+tag+" accept")
-		}
-	}
-	return lines
-}
