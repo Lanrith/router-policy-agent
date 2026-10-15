@@ -19,3 +19,6 @@
 /baseline.json
 /bindings.json
 /directory.json
+
+__pycache__/
+*.pyc
