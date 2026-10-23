@@ -18,5 +18,5 @@ jobs:
       issues: write
       id-token: write
       attestations: write
-    uses: Lanrith/lanrith/.github/workflows/security-proposal.yml@1f325337c1b6c14f35c2505d63238958f4987bd9
+    uses: Lanrith/lanrith/.github/workflows/security-proposal.yml@9da4c6680565d48377279fda3f82c2f481c1c8ef
     secrets: inherit

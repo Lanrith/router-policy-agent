@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Lanrith/lanrith
-          ref: 1f325337c1b6c14f35c2505d63238958f4987bd9
+          ref: 9da4c6680565d48377279fda3f82c2f481c1c8ef
           path: maintenance-tools
           persist-credentials: false
       - name: Bind the exact approved change to the release
@@ -94,7 +94,7 @@ jobs:
       issues: write
       id-token: write
       attestations: write
-    uses: Lanrith/lanrith/.github/workflows/publish-release.yml@1f325337c1b6c14f35c2505d63238958f4987bd9
+    uses: Lanrith/lanrith/.github/workflows/publish-release.yml@9da4c6680565d48377279fda3f82c2f481c1c8ef
     with:
       artifact-id: ${{ needs.attest.outputs.artifact-id }}
       version: ${{ inputs.version }}

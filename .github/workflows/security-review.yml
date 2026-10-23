@@ -22,7 +22,7 @@ jobs:
       pull-requests: read
       id-token: write
       attestations: write
-    uses: Lanrith/lanrith/.github/workflows/security-review.yml@1f325337c1b6c14f35c2505d63238958f4987bd9
+    uses: Lanrith/lanrith/.github/workflows/security-review.yml@9da4c6680565d48377279fda3f82c2f481c1c8ef
     with:
       pr: ${{ inputs.pr || 0 }}
     secrets: inherit
