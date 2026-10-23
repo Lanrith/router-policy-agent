@@ -1,0 +1,7 @@
+{
+  "go": {
+    "current": "1.27.3",
+    "previous": "1.26.10"
+  },
+  "integration_image": "docker.io/library/golang@sha256:88750ccdd0f2a77fcc00a14b1a48d6409bd8ddb5d7c2dd6ec0b4a2e916daf9d9"
+}

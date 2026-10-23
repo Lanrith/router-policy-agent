@@ -1,0 +1,19 @@
+name: Clean completed Actions handoffs
+on:
+  schedule:
+    - cron: '11 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: maintenance-cleanup-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      actions: write
+      id-token: write
+      attestations: write
+    uses: Lanrith/lanrith/.github/workflows/cleanup-artifacts.yml@157968c276597baa32d3ecf3e53e1133306be67a

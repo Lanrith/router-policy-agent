@@ -45,8 +45,8 @@ def main():
         stream.write('source_commit='+source+'\nversion='+args.version+'\n')
         stream.write('assessed_at='+datetime.datetime.now(datetime.timezone.utc).isoformat()+'\n')
         stream.flush()
-        run('go', 'run', 'golang.org/x/vuln/cmd/govulncheck@v1.8.0', '-version', stdout=stream)
-        run('go', 'run', 'golang.org/x/vuln/cmd/govulncheck@v1.8.0', './...', stdout=stream)
+        run('go', 'run', 'golang.org/x/vuln/cmd/govulncheck@v1.9.0', '-version', stdout=stream)
+        run('go', 'run', 'golang.org/x/vuln/cmd/govulncheck@v1.9.0', './...', stdout=stream)
         for package, commands in packages.items():
             with tempfile.TemporaryDirectory(prefix='lanrith-policy-package.') as temporary:
                 root = Path(temporary)
@@ -59,7 +59,7 @@ def main():
                         '-X github.com/lanrith/router-policy-agent/internal/cli.Version='+args.version,
                         '-o', str(binary), './cmd/'+command, env={**os.environ, 'CGO_ENABLED': '0'})
                     binary.chmod(0o755)
-                    run('go', 'run', 'golang.org/x/vuln/cmd/govulncheck@v1.8.0', '-mode=binary', str(binary), stdout=stream)
+                    run('go', 'run', 'golang.org/x/vuln/cmd/govulncheck@v1.9.0', '-mode=binary', str(binary), stdout=stream)
                     observed = run(str(binary), '-version', capture_output=True, text=True).stdout.strip()
                     if observed != args.version:
                         raise ValueError('Binary version does not match release')

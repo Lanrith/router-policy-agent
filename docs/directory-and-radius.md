@@ -364,7 +364,9 @@ the subprocess fixture explicitly skips that mode rather than accepting stderr
 or inheriting test-only environment variables.
 
 Before building an installable binary, use a patched supported Go toolchain.
-The cached Go 1.26.7 test image predates the Go 1.26.9 security release; see the
+Release builds use the compiler pinned in `.go-version`; compatibility tests
+use the supported branches in `.github/toolchains.json`. See
+[security maintenance](security-maintenance.md) and the
 [Go release history](https://go.dev/doc/devel/release).
 
 ### Running the shadow collector

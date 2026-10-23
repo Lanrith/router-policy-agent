@@ -1,0 +1,28 @@
+name: Security update review
+on:
+  workflow_run:
+    workflows: [CI, Check]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        required: true
+        type: number
+permissions:
+  contents: read
+concurrency:
+  group: maintenance-review-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
+jobs:
+  review:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+      id-token: write
+      attestations: write
+    uses: Lanrith/lanrith/.github/workflows/security-review.yml@157968c276597baa32d3ecf3e53e1133306be67a
+    with:
+      pr: ${{ inputs.pr || 0 }}
+    secrets: inherit

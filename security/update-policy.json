@@ -1,0 +1,28 @@
+{
+  "component_repositories": [],
+  "go_branches": [
+    "1.26",
+    "1.27"
+  ],
+  "large_artifact_retention_days": 1,
+  "maximum_changes": 30,
+  "maximum_validation_age_hours": 12,
+  "mode": "report-only",
+  "node_branches": [
+    "24"
+  ],
+  "npm_packages": [],
+  "paid_ai": false,
+  "proposal_branch": "automation/security-updates",
+  "proposer_app_id": 5355607,
+  "proposer_login": "lanrith-dependency-updater[bot]",
+  "proposer_user_id": 343878804,
+  "repository": "Lanrith/router-policy-agent",
+  "required_workflows": {
+    ".github/workflows/check.yml": [
+      "Required checks"
+    ]
+  },
+  "reviewer_app_id": null,
+  "schema": 1
+}
