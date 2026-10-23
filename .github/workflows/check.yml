@@ -4,20 +4,43 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
   workflow_call:
 
 permissions:
   contents: read
 
 jobs:
+  toolchains:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.config.outputs.matrix }}
+      integration-image: ${{ steps.config.outputs.integration-image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: config
+        run: |
+          python3 - <<'PYCONFIG'
+          import json,os,re
+          v=json.load(open('.github/toolchains.json'))
+          assert set(v)=={'go','integration_image'} and set(v['go'])=={'current','previous'}
+          assert all(re.fullmatch(r'1[.](26|27)[.][0-9]+',x) for x in v['go'].values())
+          assert open('.go-version').read().strip()==v['go']['current']
+          assert re.fullmatch(r'docker[.]io/library/golang@sha256:[0-9a-f]{64}',v['integration_image'])
+          with open(os.environ['GITHUB_OUTPUT'],'a') as stream:
+              stream.write('matrix='+json.dumps({'include':[{'go':version,'role':role} for role,version in sorted(v['go'].items())]})+'\n')
+              stream.write('integration-image='+v['integration_image']+'\n')
+          PYCONFIG
   test:
+    needs: toolchains
     name: Test (Go ${{ matrix.go }})
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      matrix:
-        go: ['1.26.9', '1.27.2']
+      matrix: ${{ fromJSON(needs.toolchains.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,7 +58,7 @@ jobs:
           go mod download all
           git diff --exit-code
       - name: Formatting
-        if: matrix.go == '1.27.2'
+        if: matrix.role == 'current'
         run: test -z "$(gofmt -l cmd internal)"
       - name: Build and vet
         run: |
@@ -44,21 +67,22 @@ jobs:
       - name: Race and shuffled tests including Linux IPC
         run: go test -race -shuffle=on -count=1 -tags integration -coverprofile=coverage.out ./...
       - name: Fuzz properties
-        if: matrix.go == '1.27.2'
+        if: matrix.role == 'current'
         run: make fuzz
   integration:
+    needs: toolchains
     name: Isolated Linux UID boundary
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     container:
-      image: docker.io/library/golang@sha256:cf7e928cb9edc2ed8b3cc6fe77ee1ee30b9fea28149564c8840097321a7600ea # Go 1.26.9
+      image: ${{ needs.toolchains.outputs.integration-image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version-file: .go-version
           cache: false
       - name: Qualify actual unprivileged peer and durable state
         run: |
@@ -89,7 +113,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version-file: .go-version
           cache: false
       - name: Pinned static and security linters
         run: |
@@ -105,17 +129,17 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.2'
+          go-version-file: .go-version
           cache: false
       - name: Pinned vulnerability scan
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
 
   required:
     name: Required checks
     if: always()
-    needs: [test, integration, kernel, lint, security]
+    needs: [toolchains, test, integration, kernel, lint, security]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every qualification gate
