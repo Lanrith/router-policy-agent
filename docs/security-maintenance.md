@@ -22,3 +22,7 @@ active runs and durable release assets. Paid AI services are not used.
 See [the owner setup and audit instructions](https://github.com/Lanrith/lanrith/blob/main/docs/security-maintenance.md).
 
 Cleanup skips empty inventories. Its own small audit handoffs expire after one day, so removing them does not generate another set of audit records.
+
+The publisher verifies a human reviewer's current write or admin access directly.
+Private organisation membership can appear as contributor status to an
+installation token; that display value does not establish review authority.
