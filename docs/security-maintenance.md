@@ -20,3 +20,5 @@ its plan before deleting completed handoffs, rechecks every identity, and preser
 active runs and durable release assets. Paid AI services are not used.
 
 See [the owner setup and audit instructions](https://github.com/Lanrith/lanrith/blob/main/docs/security-maintenance.md).
+
+Cleanup skips empty inventories. Its own small audit handoffs expire after one day, so removing them does not generate another set of audit records.
