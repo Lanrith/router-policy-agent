@@ -173,7 +173,7 @@ map 10.250.0.10 fdca:1a2b::10
 		}
 	})
 	// #nosec G204 -- Fixed binary and synthetic config in an acknowledged empty namespace.
-	translator := exec.CommandContext(ctx, "/usr/local/sbin/tayga", "--nodetach", "--stdout", "--config", configuration)
+	translator := exec.CommandContext(ctx, "/usr/local/sbin/tayga", "--nodetach", "--config", configuration)
 	translator.Stdout, translator.Stderr = logFile, logFile
 	translator.Env = []string{"LC_ALL=C", "PATH=/usr/sbin:/usr/bin"}
 	if err := translator.Start(); err != nil {

@@ -55,7 +55,7 @@ func (compiler *Compiler) checkGrant(grant Grant, compiledAt time.Time) error {
 		return errors.New("policy: invalid candidate grant identity or scope")
 	}
 	if !compiler.grantGeometry(grant) {
-		return errors.New("policy: candidate grant differs from untrusted geometry")
+		return errors.New("policy: candidate grant differs from managed network geometry")
 	}
 	for _, endpoint := range []Endpoint{grant.Device, grant.Peer} {
 		expected, err := resolveEndpoint(compiler.baseline, endpoint.Real)
@@ -64,7 +64,7 @@ func (compiler *Compiler) checkGrant(grant Grant, compiledAt time.Time) error {
 		}
 	}
 	flow := floorFlow{
-		mac: grant.MAC, placement: Untrusted, device: grant.Device.Real, peer: grant.Peer.Real, port: grant.Port,
+		mac: grant.MAC, placement: compiler.grantRole(grant), incoming: grant.Interface, device: grant.Device.Real, peer: grant.Peer.Real, port: grant.Port,
 		rule: Rule{Direction: grant.Direction, Protocol: grant.Protocol},
 	}
 	if code := compiler.floor(flow); code != "" {
@@ -86,11 +86,15 @@ func (compiler *Compiler) checkGrant(grant Grant, compiledAt time.Time) error {
 }
 
 func (compiler *Compiler) grantGeometry(grant Grant) bool {
+	return compiler.grantRole(grant) != Unknown
+}
+
+func (compiler *Compiler) grantRole(grant Grant) Role {
 	for _, zone := range compiler.baseline.Zones {
-		if zone.Role == Untrusted && zone.VLAN == grant.VLAN &&
+		if compiler.baseline.DirectoryGrantNetwork(zone.Role) && zone.VLAN == grant.VLAN &&
 			slices.Contains(zone.Interfaces, grant.Interface) && inPrefixes(grant.Device.Real, zone.Networks) {
-			return true
+			return zone.Role
 		}
 	}
-	return false
+	return Unknown
 }

@@ -132,6 +132,7 @@ type configuredResources struct {
 	store    *state.Store
 	executor *process
 	gate     *generationGate
+	nat64    nativeNAT64Supervisor
 }
 
 // Opening is inert: the state lock and checked executable/fence descriptors
@@ -175,10 +176,14 @@ func openConfiguredWithClock(
 	// The recovery command never samples time or constructs a reader engine.
 	r.backend.options.clock = clock
 	timeout := time.Duration(config.RequestTimeoutMS) * time.Millisecond
+	persistence := agent.Persistence{Load: r.store.Load, Save: r.store.Save}
+	if config.Mode == agent.Enforce && r.backend.options.profile.baseline.NetworkModel != nil {
+		persistence.AdvanceOwnershipEpoch = r.store.AdvanceOwnershipEpoch
+	}
 	r.service, err = r.backend.newService(serviceOptions{
 		mode:     config.Mode,
-		state:    agent.Persistence{Load: r.store.Load, Save: r.store.Save},
-		bindings: bindings, readerUID: config.ReaderUID, requestTimeout: timeout,
+		state:    persistence,
+		bindings: bindings, nat64: r.nat64, readerUID: config.ReaderUID, requestTimeout: timeout,
 	})
 	if err != nil {
 		return nil, err
@@ -251,6 +256,18 @@ func openConfiguredOwner(
 	})
 	if err != nil {
 		return nil, err
+	}
+	transports := profile.layout.native.selectedNAT64Transports()
+	if config.Mode == agent.Enforce && len(transports) != 0 {
+		if config.NAT64Runtime == nil {
+			return nil, errors.New("firewall: enforcing NAT64 profile requires a pinned runtime manifest")
+		}
+		r.nat64, err = loadRuntimeNAT64Supervisor(ctx, profile, profileOptions(*config.NAT64Runtime))
+		if err != nil {
+			return nil, err
+		}
+	} else if config.NAT64Runtime != nil {
+		return nil, errors.New("firewall: NAT64 runtime manifest has no enforcing selected component")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

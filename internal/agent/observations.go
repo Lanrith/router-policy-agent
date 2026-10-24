@@ -20,7 +20,7 @@ func (engine *Engine) rememberProvenance(candidate policy.Candidate, directory p
 		if group.Policy == nil {
 			continue
 		}
-		doc, err := policy.ParseGroup(*group.Policy)
+		doc, err := engine.compiler.ParseGroup(*group.Policy)
 		if err != nil {
 			continue
 		}

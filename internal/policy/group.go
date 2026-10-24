@@ -81,6 +81,10 @@ type Rule struct {
 
 // ParseGroup validates the entire exact schema before interpreting a policy.
 func ParseGroup(raw string) (Document, error) {
+	return parseGroup(raw, false)
+}
+
+func parseGroup(raw string, named bool) (Document, error) {
 	data := []byte(raw)
 	object := map[string]json.RawMessage{}
 	if err := strictjson.Decode(data, &object, AttributeLimit); err != nil {
@@ -105,13 +109,17 @@ func ParseGroup(raw string) (Document, error) {
 	if err := strictjson.Decode(data, &document, AttributeLimit); err != nil {
 		return Document{}, err
 	}
-	if document.SchemaVersion != 1 || !validRole(document.VLANRole) {
+	isRoleValid := validRole(document.VLANRole)
+	if named {
+		isRoleValid = validNetworkName(document.VLANRole)
+	}
+	if document.SchemaVersion != 1 || !isRoleValid {
 		return Document{}, errors.New("policy: unsupported schema or role")
 	}
 	if kind == "placement" {
 		return document, nil
 	}
-	if document.VLANRole != Untrusted {
+	if !named && document.VLANRole != Untrusted {
 		return Document{}, errors.New("policy: dynamic access is restricted to untrusted")
 	}
 	if len(document.Rules) == 0 || len(document.Rules) > 32 {

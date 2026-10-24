@@ -33,7 +33,8 @@ def main():
     if not re.fullmatch('[0-9a-f]{40}', source):
         raise ValueError('Invalid source identity')
     packages = {'router-policy-helper': ['router-policy-helper', 'router-policy-check',
-                                          'router-policy-status', 'router-policy-recover'],
+                                          'router-policy-status', 'router-policy-recover',
+                                          'router-policy-profile'],
                 'router-policy-reader': ['router-policy-reader'],
                 'router-policy-collector': ['router-policy-collector']}
     scan = args.output/'security.txt'

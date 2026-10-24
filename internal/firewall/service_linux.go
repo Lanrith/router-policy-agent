@@ -26,8 +26,16 @@ type serviceOptions struct {
 	mode           agent.Mode
 	state          agent.Persistence
 	bindings       func(context.Context) (binding.Snapshot, error)
+	nat64          nativeNAT64Supervisor
 	readerUID      uint32
 	requestTimeout time.Duration
+}
+
+// nativeNAT64Supervisor is trusted helper-local runtime wiring. Its opaque
+// activation proofs must come from the live translator owner, never from the
+// pinned profile, build-time YAML, reader IPC or an nftables listing.
+type nativeNAT64Supervisor interface {
+	activations(context.Context, []*nativeNAT64Transport) ([]nativeNAT64Activation, error)
 }
 
 // guardedService pairs the real backend, immutable helper compiler and serial
@@ -56,6 +64,14 @@ func (b *guardedBackend) newService(options serviceOptions) (*guardedService, er
 		return nil, errors.New("firewall: service requires an explicit valid mode")
 	}
 	profile := b.options.profile
+	transports := profile.layout.native.selectedNAT64Transports()
+	if profile.layout.native == nil {
+		transports = nil
+	}
+	if options.mode == agent.Enforce && (len(transports) != 0) != (options.nat64 != nil) ||
+		options.mode == agent.Shadow && options.nat64 != nil {
+		return nil, errors.New("firewall: service NAT64 supervision differs from selected runtime")
+	}
 	compiler, err := policy.New(profile.baseline)
 	if err != nil {
 		return nil, profileFailure("helper catalog invalid", err)
@@ -68,6 +84,13 @@ func (b *guardedBackend) newService(options serviceOptions) (*guardedService, er
 	callbacks := agent.Enforcement{}
 	if options.mode == agent.Enforce {
 		callbacks = agent.Enforcement{Seal: b.seal, Apply: b.apply}
+		if profile.layout.ownership {
+			callbacks.RefreshOwnership, callbacks.ClearOwnership = b.refreshOwnership, b.clearOwnership
+			callbacks.RefreshConfiguration = func(ctx context.Context, configuration policy.OwnerConfiguration) error {
+				return b.refreshRuntimeConfiguration(ctx, configuration, options.nat64)
+			}
+			callbacks.ClearConfiguration = b.clearRuntimeConfiguration
+		}
 	}
 	engine, err := agent.New(profile.baseline, agent.Options{
 		Mode: options.mode, State: options.state, Bindings: options.bindings,
@@ -142,13 +165,34 @@ func (s *guardedService) serveListeners(ctx context.Context, listeners serviceLi
 	if err := s.engine.Start(ctx); err != nil {
 		return fmt.Errorf("firewall: start helper service: %w", err)
 	}
-	if listeners.status == nil {
-		return s.server.Serve(ctx, listeners.requests)
+	servers := func(ctx context.Context) error {
+		if listeners.status == nil {
+			return s.server.Serve(ctx, listeners.requests)
+		}
+		return serveHelperPair(ctx,
+			func(ctx context.Context) error { return s.server.Serve(ctx, listeners.requests) },
+			func(ctx context.Context) error { return listeners.operator.Serve(ctx, listeners.status) },
+		)
 	}
-	return serveHelperPair(ctx,
-		func(ctx context.Context) error { return s.server.Serve(ctx, listeners.requests) },
-		func(ctx context.Context) error { return listeners.operator.Serve(ctx, listeners.status) },
-	)
+	if s.backend.options.profile.layout.ownership {
+		return serveHelperPair(ctx, servers, s.superviseOwnership)
+	}
+	return servers(ctx)
+}
+
+func (s *guardedService) superviseOwnership(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := s.engine.RefreshBindings(ctx); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // Both fixed server functions honor cancellation and join their own I/O

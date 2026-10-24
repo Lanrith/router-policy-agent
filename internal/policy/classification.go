@@ -52,7 +52,7 @@ func (compiler *Compiler) ClassifyBindings(
 		if err != nil || canonical != record.MAC {
 			return nil, errors.New("policy: invalid classification binding identity")
 		}
-		if _, exists := slices.BinarySearch(cohort, record.MAC); !exists || !compiler.validBinding(record, Untrusted) {
+		if _, exists := slices.BinarySearch(cohort, record.MAC); !exists || compiler.bindingRole(record) == Unknown {
 			continue
 		}
 		for _, address := range record.Addresses {

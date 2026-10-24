@@ -37,6 +37,27 @@ func OpenRegular(ctx context.Context, root *os.Root, options FileOptions) (*os.F
 	return file, nil
 }
 
+// OpenReadOnlyRegular is for root-owned runtime evidence that another account
+// may need to read, such as a daemon configuration. It retains the no-follow,
+// single-link, size and ownership checks while allowing read bits; no group or
+// other write bit is accepted.
+func OpenReadOnlyRegular(ctx context.Context, root *os.Root, options FileOptions) (*os.File, error) {
+	if ctx == nil || root == nil || !validName(options.Name) || options.MaximumSize <= 0 {
+		return nil, errors.New("hostfs: invalid read-only regular-file options")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := openNoFollow(root, options.Name, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, fmt.Errorf("hostfs: open read-only file: %w", err)
+	}
+	if err := CheckReadOnlyFile(file, options.OwnerUID, options.MaximumSize); err != nil {
+		return nil, errors.Join(err, file.Close())
+	}
+	return file, nil
+}
+
 // OpenLock opens the fixed empty process-lock file without following links.
 // Its lifetime and exclusive locking remain the caller's responsibility.
 func OpenLock(ctx context.Context, root *os.Root, owner uint32) (*os.File, error) {
@@ -89,6 +110,16 @@ func openNoFollow(root *os.Root, name string, flags int, mode uint32) (*os.File,
 // CheckPrivateFile validates an opened descriptor, not a prior pathname stat.
 // maximum may be zero for a deliberately empty lock file.
 func CheckPrivateFile(file *os.File, owner uint32, maximum int64) error {
+	return checkRegularFile(file, owner, maximum, false)
+}
+
+// CheckReadOnlyFile permits read bits but still rejects every writable,
+// special, linked, oversized or differently owned file.
+func CheckReadOnlyFile(file *os.File, owner uint32, maximum int64) error {
+	return checkRegularFile(file, owner, maximum, true)
+}
+
+func checkRegularFile(file *os.File, owner uint32, maximum int64, sharedRead bool) error {
 	if file == nil || maximum < 0 {
 		return errors.New("hostfs: invalid private-file descriptor")
 	}
@@ -100,7 +131,11 @@ func CheckPrivateFile(file *os.File, owner uint32, maximum int64) error {
 	if !ok || !info.Mode().IsRegular() || stat.Nlink != 1 || stat.Uid != owner {
 		return errors.New("hostfs: untrusted private-file identity")
 	}
-	isUnsafeMode := info.Mode().Perm()&0o177 != 0 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0
+	unsafePermissions := info.Mode().Perm()&0o177 != 0
+	if sharedRead {
+		unsafePermissions = info.Mode().Perm()&0o022 != 0
+	}
+	isUnsafeMode := unsafePermissions || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0
 	if isUnsafeMode || info.Size() < 0 || info.Size() > maximum {
 		return errors.New("hostfs: unsafe private-file permissions or size")
 	}

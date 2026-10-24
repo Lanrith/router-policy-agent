@@ -9,9 +9,11 @@ import (
 // NAT64 declares an installed /96 translator and its eligible target class.
 // Scope is global or private; unsupported/non-global targets never use the WKP.
 type NAT64 struct {
-	ID     string       `json:"id"`
-	Prefix netip.Prefix `json:"prefix"`
-	Scope  string       `json:"scope"`
+	SourcePool     *netip.Prefix        `json:"source_pool,omitempty"`
+	SourceMappings []NAT64SourceMapping `json:"source_mappings,omitempty"`
+	ID             string               `json:"id"`
+	Prefix         netip.Prefix         `json:"prefix"`
+	Scope          string               `json:"scope"`
 }
 
 // NAT46 declares an approved alias mapping. Reserved but unready maps grant nothing.
@@ -61,11 +63,12 @@ func validateTranslators(b Baseline) error {
 		}
 	}
 	aliases := map[netip.Addr]bool{}
+	targets := map[netip.Addr]bool{}
 	for _, mapping := range b.NAT46 {
 		isAddressValid := mapping.Alias.Is4() && mapping.Target.Is6() &&
 			validAddress(mapping.Alias) && validAddress(mapping.Target)
 		if !identifier.MatchString(mapping.ID) || seenIDs[mapping.ID] ||
-			!isAddressValid || aliases[mapping.Alias] || !inPrefixes(mapping.Alias, b.NAT46Pools) {
+			!isAddressValid || aliases[mapping.Alias] || targets[mapping.Target] || !inPrefixes(mapping.Alias, b.NAT46Pools) {
 			return errors.New("policy: invalid or duplicate nat46 mapping")
 		}
 		for _, translator := range b.NAT64 {
@@ -77,8 +80,9 @@ func validateTranslators(b Baseline) error {
 			return errors.New("policy: chained well-known target is unsupported")
 		}
 		seenIDs[mapping.ID], aliases[mapping.Alias] = true, true
+		targets[mapping.Target] = true
 	}
-	return nil
+	return validateNAT64Sources(b)
 }
 
 // Resolve decodes recognized aliases before deriving native and NAT counterparts.
@@ -103,6 +107,13 @@ func resolveEndpoint(b Baseline, address netip.Addr) (Endpoint, error) {
 	}
 	variants := []netip.Addr{realPeer}
 	if realPeer.Is6() {
+		for _, component := range b.NAT64 {
+			for _, mapping := range component.SourceMappings {
+				if mapping.Ready && mapping.Source == realPeer {
+					variants = append(variants, mapping.Alias)
+				}
+			}
+		}
 		for _, mapping := range b.NAT46 {
 			if mapping.Ready && mapping.Target == realPeer {
 				variants = append(variants, mapping.Alias)
@@ -112,7 +123,7 @@ func resolveEndpoint(b Baseline, address netip.Addr) (Endpoint, error) {
 	// Include installed NAT64 representations of native IPv4 peers and ready
 	// NAT46 aliases. This is a bounded closure, not a new translation mapping.
 	for _, variant := range slices.Clone(variants) {
-		if !variant.Is4() {
+		if !variant.Is4() || b.NetworkModel != nil && variant != realPeer {
 			continue
 		}
 		for _, translator := range b.NAT64 {
@@ -127,6 +138,19 @@ func resolveEndpoint(b Baseline, address netip.Addr) (Endpoint, error) {
 
 func realAddress(b Baseline, address netip.Addr) (netip.Addr, error) {
 	if address.Is4() {
+		for _, component := range b.NAT64 {
+			for _, mapping := range component.SourceMappings {
+				if mapping.Alias == address {
+					if !mapping.Ready {
+						return netip.Addr{}, errors.New("policy: NAT64 source alias is not ready")
+					}
+					return mapping.Source, nil
+				}
+			}
+		}
+		if sourcePoolContains(b, address) {
+			return netip.Addr{}, errors.New("policy: unmapped reserved NAT64 source alias")
+		}
 		for _, mapping := range b.NAT46 {
 			if mapping.Alias != address {
 				continue
@@ -146,6 +170,9 @@ func realAddress(b Baseline, address netip.Addr) (netip.Addr, error) {
 			continue
 		}
 		decoded := decode(address)
+		if b.NetworkModel != nil && (sourcePoolContains(b, decoded) || inPrefixes(decoded, b.NAT46Pools)) {
+			return netip.Addr{}, errors.New("policy: chained translation is not admitted")
+		}
 		if !eligible(translator, decoded) {
 			return netip.Addr{}, errors.New("policy: target is ineligible for nat64 prefix")
 		}

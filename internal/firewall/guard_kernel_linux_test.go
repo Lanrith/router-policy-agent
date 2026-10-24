@@ -19,9 +19,17 @@ import (
 )
 
 func TestKernelNativeGuardPermitAndRevoke(t *testing.T) {
+	testKernelNativeGuardPermitAndRevoke(t, false)
+}
+
+func TestKernelNamedGuardPermitAndRevoke(t *testing.T) {
+	testKernelNativeGuardPermitAndRevoke(t, true)
+}
+
+func testKernelNativeGuardPermitAndRevoke(t *testing.T, named bool) {
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
 	defer cancel()
 	setupPacketLinks(ctx, t)
 	for _, name := range []string{"lan11", "lan12", "lan14", "lan15"} {
@@ -33,6 +41,14 @@ func TestKernelNativeGuardPermitAndRevoke(t *testing.T) {
 		})
 	}
 	_, _, baseline, _ := renderFixture(t)
+	if named {
+		baseline.Zones = []policy.Zone{baseline.Zones[0], baseline.Zones[3]}
+		baseline.Zones[0].Role, baseline.Zones[1].Role = "home", "devices"
+		baseline.NetworkModel = &policy.NetworkModel{SchemaVersion: 1,
+			ManagedNetworks: []policy.Role{"devices"}, UplinkInterface: "wan",
+			Rules: []policy.NetworkRule{{Action: "allow", Authorization: "directory", Protocol: "any",
+				From: []policy.NetworkSelector{{}}, To: []policy.NetworkSelector{{}}}}}
+	}
 	layout, err := newGuardLayout(baseline)
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +58,9 @@ func TestKernelNativeGuardPermitAndRevoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	packetNft(ctx, t, string(program))
+	if named {
+		applyOwnershipFixture(ctx, t, baseline)
+	}
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
 		defer cancel()
@@ -95,6 +114,24 @@ table inet guard_router_fixture {
 	} {
 		t.Run(family.name, func(t *testing.T) {
 			peerIP, deviceIP := netip.MustParseAddr(family.peer), netip.MustParseAddr(family.device)
+			if named {
+				t.Run("ownership revocation leaves no borrowed lease", func(t *testing.T) {
+					applyGuardFixture(ctx, t, guardPacketBatch(t, deviceIP, peerIP, true))
+					revocation, err := prepareOwnershipClear(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					executeGuardFixture(ctx, t, revocation.batch.data)
+					frame := packetFrame(t, packetDatagram{source: deviceIP, destination: peerIP,
+						sourceMAC: "02:00:00:00:00:13", destinationMAC: "02:00:00:00:01:13",
+						sourcePort: 41993, destinationPort: 6053, payload: "synthetic-no-ownership"})
+					sendPacket(ctx, t, device, frame)
+					receivePacket(ctx, t, peer, frame, false)
+					applyOwnershipFixture(ctx, t, baseline)
+					sendPacket(ctx, t, device, frame)
+					receivePacket(ctx, t, peer, frame, true)
+				})
+			}
 			flows := []struct {
 				name                        string
 				fromPeer                    bool
@@ -269,6 +306,76 @@ table inet guard_recheck_fixture {
 					guardFixtureCounter(ctx, t, "guard_recheck_fixture", "changed_tuple") != 1 ||
 					guardFixtureCounter(ctx, t, "guard_recheck_fixture", "after_confirmation") != 0 {
 					t.Fatal("changed tuple did not encounter a closed late leased guard")
+				}
+			})
+			t.Run("QoS byte survives all four leased directions", func(t *testing.T) {
+				applyGuardFixture(ctx, t, guardPacketBatch(t, deviceIP, peerIP, true))
+				packetNft(ctx, t, `
+table inet guard_qos_fixture {
+ chain mark_qos { type filter hook forward priority -151; policy accept;
+  meta l4proto udp meta mark set 0x00450000
+ }
+}
+table netdev guard_qos_fixture {
+ counter preserved {}
+ chain observe_home { type filter hook egress device "lan10" priority 1; policy accept;
+  meta l4proto udp meta mark & 0x00ff0000 == 0x00450000 counter name preserved
+ }
+ chain observe_devices { type filter hook egress device "lan13" priority 1; policy accept;
+  meta l4proto udp meta mark & 0x00ff0000 == 0x00450000 counter name preserved
+ }
+}`)
+				t.Cleanup(func() {
+					cleanup, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
+					defer cancel()
+					packetNft(cleanup, t, "delete table inet guard_qos_fixture; delete table netdev guard_qos_fixture")
+				})
+				for _, flow := range flows {
+					input, output, source, target := device, peer, deviceIP, peerIP
+					sourceMAC, routerMAC := "02:00:00:00:00:13", "02:00:00:00:01:13"
+					if flow.fromPeer {
+						input, output, source, target = peer, device, peerIP, deviceIP
+						sourceMAC, routerMAC = "02:00:00:00:00:10", "02:00:00:00:01:10"
+					}
+					frame := packetFrame(t, packetDatagram{source: source, destination: target,
+						sourceMAC: sourceMAC, destinationMAC: routerMAC, sourcePort: flow.sourcePort,
+						destinationPort: flow.destinationPort, payload: "synthetic-qos-" + flow.name})
+					sendPacket(ctx, t, input, frame)
+					receivePacket(ctx, t, output, frame, true)
+				}
+				if guardFamilyCounter(ctx, t, "netdev", "guard_qos_fixture", "preserved") != 4 {
+					t.Fatal("directory marking changed the reserved QoS byte")
+				}
+			})
+			t.Run("physical listener changed after confirmation is denied", func(t *testing.T) {
+				requireKernelHeaderMutation(t)
+				applyGuardFixture(ctx, t, guardPacketBatch(t, deviceIP, peerIP, true))
+				packetNft(ctx, t, `
+table inet guard_listener_fixture {
+ counter changed {}
+ chain mutate { type filter hook forward priority 151; policy accept;
+  iifname "lan10" oifname "lan13" udp sport 41230 udp dport 6053 counter name changed udp dport set 6054
+ }
+}
+table netdev guard_listener_fixture {
+ counter passed {}
+ chain observe { type filter hook egress device "lan13" priority 1; policy accept;
+  meta l4proto udp counter name passed
+ }
+}`)
+				t.Cleanup(func() {
+					cleanup, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
+					defer cancel()
+					packetNft(cleanup, t, "delete table inet guard_listener_fixture; delete table netdev guard_listener_fixture")
+				})
+				frame := packetFrame(t, packetDatagram{source: peerIP, destination: deviceIP,
+					sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
+					sourcePort: 41230, destinationPort: 6053, payload: "synthetic-changed-physical-listener"})
+				sendPacket(ctx, t, peer, frame)
+				receivePacket(ctx, t, device, frame, false)
+				if guardFamilyCounter(ctx, t, "inet", "guard_listener_fixture", "changed") != 1 ||
+					guardFamilyCounter(ctx, t, "netdev", "guard_listener_fixture", "passed") != 0 {
+					t.Fatal("changed transport listener bypassed the final physical check")
 				}
 			})
 			t.Run("lease withdrawn between hooks is rechecked in every direction", func(t *testing.T) {
@@ -595,7 +702,12 @@ func guardStatefulCount(ctx context.Context, t *testing.T) uint64 {
 
 func guardFixtureCounter(ctx context.Context, t *testing.T, table, name string) uint64 {
 	t.Helper()
-	data := kernelFixtureCommand(ctx, t, "list", "counter", "inet", table, name)
+	return guardFamilyCounter(ctx, t, "inet", table, name)
+}
+
+func guardFamilyCounter(ctx context.Context, t *testing.T, family, table, name string) uint64 {
+	t.Helper()
+	data := kernelFixtureCommand(ctx, t, "list", "counter", family, table, name)
 	var decoded struct {
 		Objects []struct {
 			Counter *struct {
@@ -704,6 +816,14 @@ func guardPacketBatch(t *testing.T, device, peer netip.Addr, permitted bool) []b
 // expiry. It is not a production lifetime override or UTC/suspend qualification.
 func shortGuardFixture(t *testing.T, data []byte) []byte {
 	t.Helper()
+	return shortGuardFixtureLifetime(t, data, 1)
+}
+
+func shortGuardFixtureLifetime(t *testing.T, data []byte, seconds int) []byte {
+	t.Helper()
+	if seconds < 1 || seconds > 90 {
+		t.Fatal("synthetic expiry outside the real lease bound")
+	}
 	var decoded guardChanges
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
@@ -728,7 +848,7 @@ func shortGuardFixture(t *testing.T, data []byte) []byte {
 			if err := json.Unmarshal(raw, &value); err != nil {
 				t.Fatal(err)
 			}
-			value.Element.Timeout = 1
+			value.Element.Timeout = seconds
 			encoded, err := json.Marshal(value)
 			if err != nil {
 				t.Fatal(err)

@@ -92,22 +92,21 @@ func (contract *reviewedRuleset) inspect(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := strictjson.Object(data, []string{"nftables"}, nil, maximumOutput); err != nil {
+	objects, err := decodeRulesetListing(ctx, data)
+	if err != nil {
 		return nil, err
 	}
-	var listing struct {
-		Objects []json.RawMessage `json:"nftables"`
-	}
-	if err := strictjson.Decode(data, &listing, maximumOutput); err != nil {
+	limit, err := layout.completeInventoryLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
-	if len(listing.Objects) < 2 || len(listing.Objects) > maximumRulesetObjects {
+	if len(objects) < 2 || len(objects) > limit {
 		return nil, errors.New("firewall: complete ruleset inventory size invalid")
 	}
-	if err := verifyListingMetadata(listing.Objects[0]); err != nil {
+	if err := verifyListingMetadata(objects[0]); err != nil {
 		return nil, err
 	}
-	protected, guards, err := splitRuleset(ctx, listing.Objects)
+	protected, guards, err := splitRuleset(ctx, objects)
 	if err != nil {
 		return nil, err
 	}
@@ -118,11 +117,11 @@ func (contract *reviewedRuleset) inspect(
 	if !bytes.Equal(program, contract.program) {
 		return nil, errors.New("firewall: reviewed ruleset drift detected")
 	}
-	inventory, err := layout.inspect(ctx, guards)
+	inventory, err := layout.inspectObjectTables(ctx, guards)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkRulesetHookOrder(listing.Objects[1:]); err != nil {
+	if err := checkRulesetHookOrder(objects[1:]); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -136,46 +135,89 @@ func (contract *reviewedRuleset) inspect(
 	return &rulesetObservation{digest: digest, guards: inventory}, nil
 }
 
-func splitRuleset(ctx context.Context, objects []json.RawMessage) ([]json.RawMessage, guardListings, error) {
+func splitRuleset(ctx context.Context, objects []json.RawMessage) ([]json.RawMessage, map[string][]json.RawMessage, error) {
 	protected := []json.RawMessage{}
 	owned := map[string][]json.RawMessage{
 		"inet": {objects[0]}, "netdev": {objects[0]},
 	}
 	for _, raw := range objects[1:] {
 		if err := ctx.Err(); err != nil {
-			return nil, guardListings{}, err
+			return nil, nil, err
 		}
-		object, err := decodeRulesetObject(raw)
+		family, helper, err := splitOwnedRulesetObject(raw)
 		if err != nil {
-			return nil, guardListings{}, err
+			return nil, nil, err
 		}
-		if object.table != ownedTable {
+		if !helper {
+			if _, err := decodeRulesetObject(raw); err != nil {
+				return nil, nil, err
+			}
 			protected = append(protected, raw)
 			continue
 		}
-		if _, exists := owned[object.family]; !exists {
-			return nil, guardListings{}, errors.New("firewall: unexpected helper table family")
+		if _, exists := owned[family]; !exists {
+			return nil, nil, errors.New("firewall: unexpected helper table family")
 		}
-		owned[object.family] = append(owned[object.family], raw)
+		owned[family] = append(owned[family], raw)
 	}
-	encode := func(objects []json.RawMessage) ([]byte, error) {
-		data, err := json.Marshal(struct {
-			Objects []json.RawMessage `json:"nftables"`
-		}{Objects: objects})
-		if err != nil {
-			return nil, errors.New("firewall: complete guard listing encoding failed")
+	return protected, owned, nil
+}
+
+// Decode the bounded envelope once. Strict decoding still checks every nested
+// key and value; exact, case-sensitive envelope keys are checked separately.
+// Unmarshalling the already validated array does not grant any NFT authority.
+func decodeRulesetListing(ctx context.Context, data []byte) ([]json.RawMessage, error) {
+	if ctx == nil {
+		return nil, errors.New("firewall: missing ruleset listing context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	objects, err := decodeNftablesArray(data, maximumOutput)
+	if err != nil {
+		return nil, err
+	}
+	return objects, ctx.Err()
+}
+
+// The complete JSON envelope has already passed strict duplicate-key, depth,
+// UTF-8 and trailing-input validation. Split by headers only; the fixed helper
+// inspector independently validates every complete object afterward. Decoding
+// and canonicalizing every packet expression here just repeats that work.
+func splitOwnedRulesetObject(raw json.RawMessage) (string, bool, error) {
+	type header struct {
+		Family string `json:"family"`
+		Table  string `json:"table"`
+		Name   string `json:"name"`
+	}
+	var object struct {
+		Table   *header `json:"table"`
+		Chain   *header `json:"chain"`
+		Set     *header `json:"set"`
+		Map     *header `json:"map"`
+		Rule    *header `json:"rule"`
+		Counter *header `json:"counter"`
+	}
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return "", false, errors.New("firewall: malformed split ruleset header")
+	}
+	if object.Table != nil {
+		object.Table.Table = object.Table.Name
+	}
+	var selected *header
+	for _, candidate := range []*header{object.Table, object.Chain, object.Set, object.Map, object.Rule, object.Counter} {
+		if candidate == nil {
+			continue
 		}
-		return data, nil
+		if selected != nil {
+			return "", false, errors.New("firewall: exact split ruleset object required")
+		}
+		selected = candidate
 	}
-	inet, err := encode(owned["inet"])
-	if err != nil {
-		return nil, guardListings{}, err
+	if selected == nil {
+		return "", false, errors.New("firewall: missing split ruleset object")
 	}
-	netdev, err := encode(owned["netdev"])
-	if err != nil {
-		return nil, guardListings{}, err
-	}
-	return protected, guardListings{inet: inet, netdev: netdev}, nil
+	return selected.Family, selected.Table == ownedTable, nil
 }
 
 func normalizeRuleset(ctx context.Context, objects []json.RawMessage, actual bool) ([]byte, error) {
@@ -356,32 +398,32 @@ func (program *rulesetProgram) checkGraph(ctx context.Context) error {
 func checkRulesetHookOrder(objects []json.RawMessage) error {
 	seen := map[string]bool{}
 	for _, raw := range objects {
-		object, err := decodeRulesetObject(raw)
-		if err != nil {
-			return err
+		// Every object has already passed either protected-object normalization
+		// or the exact fixed helper schema. Only chains can declare hooks.
+		var object struct {
+			Chain *struct {
+				Family   string  `json:"family"`
+				Hook     *string `json:"hook"`
+				Device   string  `json:"dev"`
+				Priority *int32  `json:"prio"`
+			} `json:"chain"`
 		}
-		if object.kind != "chain" || object.fields["hook"] == nil {
+		if err := json.Unmarshal(raw, &object); err != nil {
+			return errors.New("firewall: invalid inspected ruleset object")
+		}
+		if object.Chain == nil || object.Chain.Hook == nil {
 			continue
 		}
-		var hook, device string
-		var priority int32
-		if err := json.Unmarshal(object.fields["hook"], &hook); err != nil {
-			return errors.New("firewall: invalid ruleset hook")
-		}
-		if rawDevice := object.fields["dev"]; rawDevice != nil {
-			if err := json.Unmarshal(rawDevice, &device); err != nil {
-				return errors.New("firewall: invalid ruleset hook device")
-			}
-		}
-		if err := json.Unmarshal(object.fields["prio"], &priority); err != nil {
+		chain := object.Chain
+		if chain.Priority == nil {
 			return errors.New("firewall: invalid ruleset hook priority")
 		}
-		families := []string{object.family}
-		if object.family == "inet" {
+		families := []string{chain.Family}
+		if chain.Family == "inet" {
 			families = []string{"ip", "ip6"}
 		}
 		for _, family := range families {
-			key := family + "/" + hook + "/" + device + "/" + strconv.FormatInt(int64(priority), 10)
+			key := family + "/" + *chain.Hook + "/" + chain.Device + "/" + strconv.FormatInt(int64(*chain.Priority), 10)
 			if seen[key] {
 				return errors.New("firewall: ambiguous ruleset hook ordering")
 			}

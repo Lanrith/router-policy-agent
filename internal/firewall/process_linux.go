@@ -36,6 +36,12 @@ const (
 	inspectWholeRuleset
 	applyGuarded
 	sealGuarded
+	applyOwnership
+	applyConfiguration
+	applyNAT46SourceEpoch
+	applyNAT64Allocations
+	applyNAT64Tokens
+	applyNAT64State
 )
 
 // process has no public arbitrary-command method. Its descriptor is acquired
@@ -47,10 +53,16 @@ type process struct {
 }
 
 type commandInput struct {
-	op       operation
-	payload  []byte
-	prepared *preparedBatch
-	guarded  *preparedGuardBatch
+	op              operation
+	payload         []byte
+	prepared        *preparedBatch
+	guarded         *preparedGuardBatch
+	ownership       *preparedOwnership
+	configuration   *preparedConfiguration
+	nat46Source     *preparedNAT46StaticOwnership
+	nat64Allocation *preparedNAT64Allocations
+	nat64Tokens     *nativeNAT64Tokens
+	nat64State      *preparedNAT64State
 }
 
 func openProcess(ctx context.Context, path string) (*process, error) {
@@ -206,6 +218,24 @@ func (process *process) run(ctx context.Context, input commandInput) ([]byte, er
 	if input.guarded != nil && input.op != applyGuarded && input.op != sealGuarded {
 		return nil, errors.New("firewall: guarded preparation requires its fixed operation")
 	}
+	if input.ownership != nil && input.op != applyOwnership {
+		return nil, errors.New("firewall: ownership requires its fixed operation")
+	}
+	if input.configuration != nil && input.op != applyConfiguration {
+		return nil, errors.New("firewall: configuration requires its fixed operation")
+	}
+	if input.nat46Source != nil && input.op != applyNAT46SourceEpoch {
+		return nil, errors.New("firewall: nat46 source epoch requires its fixed operation")
+	}
+	if input.nat64Allocation != nil && input.op != applyNAT64Allocations {
+		return nil, errors.New("firewall: nat64 allocations require their fixed operation")
+	}
+	if input.nat64Tokens != nil && input.op != applyNAT64Tokens {
+		return nil, errors.New("firewall: nat64 tokens require their fixed operation")
+	}
+	if input.nat64State != nil && input.op != applyNAT64State {
+		return nil, errors.New("firewall: aggregate nat64 state requires its fixed operation")
+	}
 	arguments := []string{"--json", "list", "table", "inet", ownedTable}
 	switch input.op {
 	case inspectOwned, inspectGuardEgress, inspectWholeRuleset:
@@ -238,6 +268,73 @@ func (process *process) run(ctx context.Context, input commandInput) ([]byte, er
 			input.prepared = &input.guarded.batch
 		}
 		input.payload = input.guarded.batch.data
+		arguments = []string{"--json", "--file", "-"}
+	case applyOwnership:
+		if len(input.payload) != 0 || input.prepared != nil || input.guarded != nil || input.ownership == nil {
+			return nil, errors.New("firewall: ownership mutation requires helper-local preparation")
+		}
+		if err := validateOwnershipPreparation(ctx, input.ownership, time.Now().UTC()); err != nil {
+			return nil, err
+		}
+		if !input.ownership.clear {
+			input.prepared = &input.ownership.batch
+		}
+		input.payload = input.ownership.batch.data
+		arguments = []string{"--json", "--file", "-"}
+	case applyConfiguration:
+		if len(input.payload) != 0 || input.prepared != nil || input.guarded != nil || input.ownership != nil || input.configuration == nil {
+			return nil, errors.New("firewall: configuration mutation requires helper-local preparation")
+		}
+		if err := validateConfigurationPreparation(ctx, input.configuration); err != nil {
+			return nil, err
+		}
+		if !input.configuration.clear {
+			input.prepared = &input.configuration.batch
+		}
+		input.payload = input.configuration.batch.data
+		arguments = []string{"--json", "--file", "-"}
+	case applyNAT46SourceEpoch:
+		if len(input.payload) != 0 || input.prepared != nil || input.guarded != nil || input.ownership != nil || input.configuration != nil || input.nat46Source == nil {
+			return nil, errors.New("firewall: nat46 source epoch requires helper-local original preparation")
+		}
+		if err := validateNAT46StaticOwnership(ctx, input.nat46Source); err != nil {
+			return nil, err
+		}
+		if !input.nat46Source.clear {
+			input.prepared = &input.nat46Source.batch
+		}
+		input.payload = input.nat46Source.batch.data
+		arguments = []string{"--json", "--file", "-"}
+	case applyNAT64Allocations:
+		if len(input.payload) != 0 || input.prepared != nil || input.guarded != nil || input.ownership != nil || input.configuration != nil || input.nat46Source != nil || input.nat64Allocation == nil || input.nat64Tokens != nil {
+			return nil, errors.New("firewall: nat64 allocations require helper-local original preparation")
+		}
+		if err := validateNAT64AllocationPreparation(ctx, input.nat64Allocation); err != nil {
+			return nil, err
+		}
+		if !input.nat64Allocation.clear {
+			input.prepared = &input.nat64Allocation.batch
+		}
+		input.payload = input.nat64Allocation.batch.data
+		arguments = []string{"--json", "--file", "-"}
+	case applyNAT64Tokens:
+		if len(input.payload) != 0 || input.prepared != nil || input.guarded != nil || input.ownership != nil || input.configuration != nil || input.nat46Source != nil || input.nat64Allocation != nil || input.nat64Tokens == nil || input.nat64State != nil {
+			return nil, errors.New("firewall: nat64 tokens require helper-local original preparation")
+		}
+		var err error
+		input.payload, err = input.nat64Tokens.publicationData(ctx)
+		if err != nil {
+			return nil, err
+		}
+		arguments = []string{"--json", "--file", "-"}
+	case applyNAT64State:
+		if len(input.payload) != 0 || input.prepared != nil || input.guarded != nil || input.ownership != nil || input.configuration != nil || input.nat46Source != nil || input.nat64Allocation != nil || input.nat64Tokens != nil || input.nat64State == nil {
+			return nil, errors.New("firewall: aggregate nat64 mutation requires helper-local original preparation")
+		}
+		if err := validateNAT64StatePreparation(ctx, input.nat64State); err != nil {
+			return nil, err
+		}
+		input.payload = input.nat64State.data
 		arguments = []string{"--json", "--file", "-"}
 	default:
 		return nil, errors.New("firewall: unknown operation")

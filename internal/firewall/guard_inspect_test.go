@@ -95,6 +95,12 @@ func guardListingFixture(t testing.TB, populated bool) (*guardLayout, guardListi
 			}
 			objects = append(objects, map[string]any{"set": header})
 		}
+		for _, name := range slices.Sorted(maps.Keys(schema.maps)) {
+			header := maps.Clone(schema.maps[name])
+			header["handle"] = handle
+			handle++
+			objects = append(objects, map[string]any{"map": header})
+		}
 		for _, chain := range slices.Sorted(maps.Keys(schema.rules)) {
 			for _, expressions := range schema.rules[chain] {
 				objects = append(objects, map[string]any{"rule": map[string]any{
@@ -200,7 +206,7 @@ func TestGuardInspectionRejectsSchemaRuleAndLeaseDrift(t *testing.T) {
 		{name: "null lease expiry", old: `"expires":1`, replacement: `"expires":null`},
 		{name: "unreserved egress device", netdev: true, old: `"dev":"lan13"`, replacement: `"dev":"other"`},
 		{name: "late egress hook", netdev: true, old: `"prio":0`, replacement: `"prio":1`},
-		{name: "wrong mark datatype", netdev: true, old: `"mark"]`, replacement: `"inet_service"]`},
+		{name: "wrong physical listener datatype", netdev: true, old: `"inet_service"]`, replacement: `"mark"]`},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

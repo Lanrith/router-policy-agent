@@ -70,7 +70,8 @@ func RunHelper(ctx context.Context, directory, bindingDirectory string) (result 
 
 // InitializeState is a separate first-install operation. Existing, missing or
 // corrupt history is never reset by runtime startup; an existing state file
-// makes this operation fail. It does not write networking or generation state.
+// makes this operation fail. It initializes the separate ownership sequence
+// too, without writing packet state or the shared writer generation.
 func InitializeState(ctx context.Context, directory string) (result error) {
 	config, err := loadHelperConfig(ctx, directory)
 	if err != nil {
@@ -81,7 +82,10 @@ func InitializeState(ctx context.Context, directory string) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, store.Close()) }()
-	return store.Initialize(ctx)
+	if err := store.Initialize(ctx); err != nil {
+		return err
+	}
+	return store.InitializeOwnershipEpoch(ctx)
 }
 
 func activationEnvironment(pid int, getenv func(string) string) (uintptr, uintptr, bool) {

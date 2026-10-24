@@ -36,8 +36,19 @@ func qualifyTranslatedCallbacks(
 		}
 		replace(prepared)
 	}
+	var last packetDatagram
+	var attempt int
+	var lastFromDevice, lastAllowed bool
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("synthetic callback attempt %d: from-device=%t allowed=%t tcp=%t source-port=%d destination-port=%d",
+				attempt, lastFromDevice, lastAllowed, last.isTCP, last.sourcePort, last.destinationPort)
+		}
+	})
 	exchange := func(packet packetDatagram, fromDevice, allowed bool) {
 		t.Helper()
+		attempt++
+		last, lastFromDevice, lastAllowed = packet, fromDevice, allowed
 		input, output := device, peer
 		packet.sourceMAC, packet.destinationMAC = "02:00:00:00:00:13", "02:00:00:00:01:13"
 		packet.source, packet.destination = netip.MustParseAddr("10.240.3.10"), netip.MustParseAddr("10.250.0.10")
@@ -156,7 +167,9 @@ func qualifyTranslatedCallbacks(
 	// Actual kernel expiry must stop an existing translated UDP connection in
 	// both directions without a reader refresh or a conntrack flush.
 	current, logical := translatedDeviceGrantFixture(t, true, true, true)
-	logical.data = shortGuardFixture(t, logical.data)
+	// Leave time for the full native mirror inspection on an emulated CPU.
+	// This changes only the disposable fixture, never an authorization deadline.
+	logical.data = shortGuardFixtureLifetime(t, logical.data, 3)
 	short, err := prepareMappedGuards(ctx, logical, nil, current.translationPaths)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +178,7 @@ func qualifyTranslatedCallbacks(
 	request.isTCP, reply.isTCP = false, false
 	exchange(request, true, true)
 	exchange(reply, false, true)
-	waitKernelFixture(ctx, t, 1200*time.Millisecond)
+	waitKernelFixture(ctx, t, 3200*time.Millisecond)
 	exchange(request, true, false)
 	exchange(reply, false, false)
 	if observed, err := process.inspectGuards(ctx, layout); err != nil || observed.leases != 0 {

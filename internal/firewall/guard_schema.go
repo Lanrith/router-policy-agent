@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,12 +12,41 @@ import (
 // never from an observed listing or reader-supplied manifest. It describes only
 // our objects; it is not an attestation of the surrounding protected chain graph.
 type guardTableSchema struct {
-	sets   map[string]map[string]any
-	chains map[string]map[string]any
-	rules  map[string][][]any
+	encoded map[string]*guardCompiledFields
+	sets    map[string]map[string]any
+	maps    map[string]map[string]any
+	chains  map[string]map[string]any
+	rules   map[string][][]any
 }
 
 func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
+	if layout != nil && layout.inspectionSchemas != nil {
+		schema := layout.inspectionSchemas[family]
+		if schema == nil {
+			return nil, errors.New("firewall: unsupported frozen guard family")
+		}
+		return schema, nil
+	}
+	if layout != nil && layout.native != nil {
+		base := *layout
+		base.native = nil
+		schema, err := base.schema(family)
+		if err != nil {
+			return nil, err
+		}
+		layout.native.schema(schema, family, layout.interfaces)
+		nativeSourceSchema(schema, family)
+		if family == "inet" {
+			nativeIDGrantSchema(schema, family)
+		}
+		if family == "netdev" {
+			nativeGrantSchema(schema)
+		}
+		if err := layout.nat46PublicationSchema(context.Background(), schema, family); err != nil {
+			return nil, err
+		}
+		return schema, nil
+	}
 	if layout == nil || len(layout.interfaces) == 0 {
 		return nil, errors.New("firewall: missing owned guard geometry")
 	}
@@ -33,9 +63,30 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 	}
 	schema := &guardTableSchema{
 		sets: map[string]map[string]any{}, chains: map[string]map[string]any{}, rules: map[string][][]any{},
+		maps: map[string]map[string]any{},
 	}
 	schema.sets[cohortSet] = guardSetHeader(family, cohortSet, "ether_addr", maximumCohortSize)
+	if layout.ownership {
+		for _, configuration := range []bool{false, true} {
+			mapping, set := epochChannelNames(configuration)
+			first, second := epochChannelHeaders(configuration)
+			if family == "inet" {
+				schema.maps[mapping] = first
+			} else {
+				schema.sets[set] = second
+			}
+		}
+		for _, item := range []struct{ name, address string }{{ownership4Set, "ipv4_addr"}, {ownership6Set, "ipv6_addr"}} {
+			schema.sets[item.name] = guardLeaseHeader(family, item.name, []string{"ifname", "ether_addr", item.address})
+		}
+	}
 	if family == "inet" {
+		if layout.ownership {
+			schema.sets[ownershipEpochSet] = ownershipEpochHeader(ownershipEpochSet, false)
+			schema.maps[ownershipEpochMap] = ownershipEpochHeader(ownershipEpochMap, true)
+			schema.sets[configurationEpochSet] = configurationEpochHeader(false)
+			schema.maps[configurationEpochMap] = configurationEpochHeader(true)
+		}
 		schema.sets[classified4Set] = guardSetHeader(family, classified4Set, "ipv4_addr", maximumTupleCount)
 		schema.sets[classified6Set] = guardSetHeader(family, classified6Set, "ipv6_addr", maximumTupleCount)
 	}
@@ -52,7 +103,7 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 			continue
 		}
 		schema.sets[egressSet(name)] = guardLeaseHeader(family, egressSet(name),
-			[]string{"ifname", "ether_addr", address, address, "mark"})
+			[]string{"ifname", "ether_addr", address, address, "inet_service"})
 	}
 	for _, ref := range translatedGrantRefs(layout.translationPaths) {
 		if ref.Family != family {
@@ -64,7 +115,7 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 			if ref.Name == "transit_request4_tcp" || ref.Name == "transit_request4_udp" {
 				address = "ipv4_addr"
 			}
-			datatype = []string{"ifname", address, address, "mark"}
+			datatype = []string{"ifname", address, address, "inet_service"}
 		}
 		schema.sets[ref.Name] = guardLeaseHeader(family, ref.Name, datatype)
 	}
@@ -103,7 +154,18 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 		_, translated = layout.translatedForward("accept", true)
 		schema.rules["permit_flow"] = append(schema.rules["permit_flow"], translated...)
 		schema.rules["permit_flow"] = append(schema.rules["permit_flow"], guardForwardExpressions("accept", numbers)...)
+		if layout.ownership {
+			schema.chains["validate_source"] = map[string]any{"family": family, "table": ownedTable, "name": "validate_source"}
+			schema.rules["validate_source"] = ownershipExpressions(true)
+			jump := []any{map[string]any{"jump": map[string]any{"target": "validate_source"}}}
+			schema.rules["guard_forward"] = append(schema.rules["guard_forward"][:1], append([][]any{jump}, schema.rules["guard_forward"][1:]...)...)
+			schema.rules["permit_flow"] = append([][]any{jump}, schema.rules["permit_flow"]...)
+		}
 		return schema, nil
+	}
+	if layout.ownership {
+		schema.chains["validate_target"] = map[string]any{"family": family, "table": ownedTable, "name": "validate_target"}
+		schema.rules["validate_target"] = ownershipExpressions(false)
 	}
 	for index, device := range layout.interfaces {
 		name := fmt.Sprintf("guard_egress_%d", index)
@@ -112,6 +174,9 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 			"type": "filter", "hook": "egress", "prio": 0, "policy": "accept",
 		}
 		rules := make([][]any, 0, len(grantSets)+3)
+		if layout.ownership {
+			rules = append(rules, []any{map[string]any{"jump": map[string]any{"target": "validate_target"}}})
+		}
 		rules = append(rules, layout.controllerEgressExpressions(device)...)
 		_, translated := layout.translatedEgress(device)
 		rules = append(rules, translated...)
@@ -121,11 +186,12 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 			key := map[string]any{"concat": []any{
 				guardMeta("oifname"), guardPayload("ether", "daddr"),
 				guardPayload(address, "daddr"), guardPayload(address, "saddr"),
-				guardBinary("&", guardMeta("mark"), uint64(0x0000ffff)),
+				guardPayload(protocol, guardEgressPort(set)),
 			}}
+			// nft elides the redundant l4proto match when a typed TCP/UDP
+			// payload expression already supplies that protocol dependency.
 			rules = append(rules, []any{
-				guardMatch(guardMeta("l4proto"), protocol),
-				guardMatch(guardBinary("&", guardMeta("mark"), uint64(0xff000000)), numbers[incoming]),
+				guardMatch(guardBinary("&", guardMeta("mark"), uint64(0xff00ffff)), numbers[incoming]),
 				guardMatch(key, "@"+egressSet(set)), map[string]any{"return": nil},
 			})
 		}
@@ -186,7 +252,7 @@ func guardForwardExpressions(verdict string, numbers map[string]uint64) [][]any 
 					map[string]any{"set": []string{"established", "new"}}),
 				guardMatch(map[string]any{"ct": map[string]any{"key": "direction"}}, flow.direction),
 				guardMatch(map[string]any{"concat": flow.key}, "@"+flow.set),
-				guardMark(guardBinary("|", guardBinary("&", guardMeta("mark"), numbers[guardMarkKeep]), guardListener())),
+				guardMark(guardBinary("&", guardMeta("mark"), numbers[guardMarkKeep])),
 				guardMark(guardBinary("|", guardMeta("mark"), numbers[flow.tag])), map[string]any{verdict: nil},
 			})
 		}

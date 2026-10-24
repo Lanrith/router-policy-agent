@@ -290,6 +290,7 @@ func packetFrame(t *testing.T, datagram packetDatagram) []byte {
 	switch {
 	case datagram.isICMP:
 		transport[0], transport[1] = datagram.icmpType, datagram.icmpCode
+		transport[2], transport[3] = 0, 0
 		binary.BigEndian.PutUint32(transport[4:8], datagram.icmpData)
 		checksumOffset = 2
 	case datagram.isTCP:

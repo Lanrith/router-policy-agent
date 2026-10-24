@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/netip"
@@ -53,28 +54,18 @@ type tupleKey struct {
 // to the permanent cohort is possible. No tables, chains, hooks, verdicts,
 // maps, includes, routes, object deletion or cohort removal are admitted.
 func validateBatch(data []byte) error {
-	if err := strictjson.Object(
-		data,
-		[]string{"nftables"},
-		nil,
-		maximumBatch,
-	); err != nil {
+	commands, err := decodeNftablesArray(data, maximumBatch)
+	if err != nil {
 		return err
 	}
-	var batch struct {
-		Commands []json.RawMessage `json:"nftables"`
-	}
-	if err := strictjson.Decode(data, &batch, maximumBatch); err != nil {
-		return err
-	}
-	if len(batch.Commands) < len(grantSets) || len(batch.Commands) > 2*len(grantSets)+1 {
+	if len(commands) < len(grantSets) || len(commands) > 2*len(grantSets)+1 {
 		return errors.New("firewall: invalid owned transaction size")
 	}
 	flushed, added := map[string]bool{}, map[string]bool{}
 	tupleCount := 0
-	for _, command := range batch.Commands {
+	for _, command := range commands {
 		object := map[string]json.RawMessage{}
-		if err := strictjson.Decode(command, &object, maximumBatch); err != nil || len(object) != 1 {
+		if err := json.Unmarshal(command, &object); err != nil || len(object) != 1 {
 			return errors.New("firewall: invalid owned operation")
 		}
 		if raw, exists := object["flush"]; exists {
@@ -82,7 +73,7 @@ func validateBatch(data []byte) error {
 				return errors.New("firewall: flush must precede all additions")
 			}
 			var ref objectReference
-			if err := decodeNested(
+			if err := decodeValidatedNested(
 				raw,
 				"set",
 				&ref,
@@ -101,7 +92,7 @@ func validateBatch(data []byte) error {
 			return errors.New("firewall: complete grant replacement required")
 		}
 		var values elements
-		if err := decodeNested(
+		if err := decodeValidatedNested(
 			raw,
 			"element",
 			&values,
@@ -149,27 +140,33 @@ func validateBatch(data []byte) error {
 }
 
 func decodeNested(raw json.RawMessage, key string, target any, keys []string) error {
-	if err := strictjson.Object(
-		raw,
-		[]string{key},
-		nil,
-		maximumBatch,
-	); err != nil {
-		return err
-	}
 	object := map[string]json.RawMessage{}
 	if err := strictjson.Decode(raw, &object, maximumBatch); err != nil {
 		return err
 	}
-	if err := strictjson.Object(
-		object[key],
-		keys,
-		nil,
-		maximumBatch,
-	); err != nil {
-		return err
+	return decodeNestedFields(object, key, target, keys)
+}
+
+// The complete value has passed strict syntax, duplicate-key, depth and UTF-8
+// checks. Keep exact case-sensitive non-null keys and unknown-field rejection
+// without scanning that entire subtree four times for each typed tuple.
+func decodeNestedFields(object map[string]json.RawMessage, key string, target any, keys []string) error {
+	var fields map[string]json.RawMessage
+	if len(object) != 1 || object[key] == nil || json.Unmarshal(object[key], &fields) != nil || fields == nil || len(fields) != len(keys) {
+		return errors.New("firewall: exact nested object required")
 	}
-	return strictjson.Decode(object[key], target, maximumBatch)
+	for _, name := range keys {
+		value, exists := fields[name]
+		if !exists || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("firewall: required nested field missing or null")
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(object[key]))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return errors.New("firewall: nested value does not match schema")
+	}
+	return nil
 }
 
 func ownedReference(ref objectReference) bool {

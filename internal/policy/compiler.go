@@ -295,11 +295,11 @@ func (compiler *Compiler) compileDevice(ctx context.Context, device Device, grou
 	if !device.Active {
 		return nil, "inactive_account"
 	}
-	placement, access, code := selectGroups(device, groups)
+	placement, access, code := compiler.selectGroups(device, groups)
 	if code != "" {
 		return nil, code
 	}
-	if placement != Untrusted {
+	if !compiler.baseline.DirectoryGrantNetwork(placement) {
 		return nil, "role_not_qualified"
 	}
 	if !compiler.validBinding(record, placement) {
@@ -308,11 +308,12 @@ func (compiler *Compiler) compileDevice(ctx context.Context, device Device, grou
 	grants := []Grant{}
 	grantIndex := map[string]int{}
 	tupleCount := 0
+	attemptedFamily, compatibleFamily := false, false
 	for _, group := range access {
 		if ctx.Err() != nil {
 			return nil, "compilation_canceled"
 		}
-		document, err := ParseGroup(*group.Policy)
+		document, err := compiler.ParseGroup(*group.Policy)
 		if err != nil { // selectGroups already checks this; do not trust that across refactors.
 			return nil, "malformed_group"
 		}
@@ -341,14 +342,19 @@ func (compiler *Compiler) compileDevice(ctx context.Context, device Device, grou
 						return nil, "compilation_canceled"
 					}
 					for _, address := range record.Addresses {
-						flow := floorFlow{mac: device.MAC, placement: placement, rule: rule,
-							device: address.IP, peer: peer.Real, port: port}
-						if code := compiler.floor(flow); code != "" {
-							return nil, code
-						}
 						endpoint, err := resolveEndpoint(compiler.baseline, address.IP)
 						if err != nil || endpoint.Real != address.IP {
 							return nil, "invalid_device_alias"
+						}
+						attemptedFamily = true
+						if compiler.baseline.NetworkModel != nil && !networkFamilyCompatible(endpoint, peer, rule.Direction) {
+							continue
+						}
+						compatibleFamily = true
+						flow := floorFlow{mac: device.MAC, placement: placement, rule: rule, incoming: record.Interface,
+							device: address.IP, peer: peer.Real, port: port}
+						if code := compiler.floor(flow); code != "" {
+							return nil, code
 						}
 						grantExpiry := earliest(expires, input.Bindings.ObservedAt.Add(leaseDuration(compiler.baseline)),
 							record.AssociatedAt.Add(leaseDuration(compiler.baseline)),
@@ -374,10 +380,13 @@ func (compiler *Compiler) compileDevice(ctx context.Context, device Device, grou
 			}
 		}
 	}
+	if compiler.baseline.NetworkModel != nil && attemptedFamily && !compatibleFamily {
+		return nil, "no_ordered_directory_permission"
+	}
 	return mergeGrants(grants), ""
 }
 
-func selectGroups(device Device, groups map[string]Group) (Role, []Group, string) {
+func (compiler *Compiler) selectGroups(device Device, groups map[string]Group) (Role, []Group, string) {
 	placement, placements, networkCount := Unknown, 0, 0
 	access := []Group{}
 	seen := map[string]bool{}
@@ -394,7 +403,7 @@ func selectGroups(device Device, groups map[string]Group) (Role, []Group, string
 			continue
 		}
 		networkCount++
-		document, err := ParseGroup(*group.Policy)
+		document, err := compiler.ParseGroup(*group.Policy)
 		if err != nil {
 			return Unknown, nil, "malformed_group"
 		}
@@ -408,7 +417,7 @@ func selectGroups(device Device, groups map[string]Group) (Role, []Group, string
 		return Unknown, nil, "ambiguous_placement_or_group_quota"
 	}
 	for _, group := range access {
-		document, err := ParseGroup(*group.Policy)
+		document, err := compiler.ParseGroup(*group.Policy)
 		if err != nil || document.VLANRole != placement {
 			return Unknown, nil, "conflicting_access_role"
 		}
