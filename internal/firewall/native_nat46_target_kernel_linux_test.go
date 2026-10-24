@@ -34,6 +34,9 @@ func TestKernelNamedNAT46TargetOwnership(t *testing.T) {
 		packetIP(ctx, t, "link", "set", link.name, "address", link.mac)
 		packetIP(ctx, t, "link", "set", link.name, "up")
 	}
+	// The translated IPv4 source needs a return route before the kernel can
+	// admit it to forwarding. The real translator geometry supplies this route.
+	packetIP(ctx, t, "route", "add", "10.250.0.0/24", "dev", "nat46")
 	b := nativeAccessBaseline(t)
 	prefix := netip.MustParsePrefix("fdca:1a2b:e046::/96")
 	b.NetworkModel.NAT46Prefix = &prefix
