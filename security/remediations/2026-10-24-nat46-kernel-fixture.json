@@ -1,0 +1,33 @@
+{
+  "credential_boundary": "The owner publishes the workflow timeout change. The updater App keeps contents/pull-request permissions only and adds this meaningful provenance record as the final reviewable push.",
+  "kind": "native-kernel-fixture-correction",
+  "owner_change_commit": "0b85a17a10ae704e898678f183f8f22babc5346b",
+  "prior_head": "22515a41428f0d994107afdd3c3937d5cf33b0f9",
+  "production_qualified": false,
+  "reason": "The synthetic NAT46 return packet has source 10.250.0.20, but its fixture omitted the translator-pool return route. The kernel discarded that packet before inet forwarding and the target-ownership predicates. Add the same route supplied by real translator geometry, keeping all ownership, expiry, tamper and packet-drop assertions.",
+  "repository": "Lanrith/router-policy-agent",
+  "requires_human": true,
+  "schema": 1,
+  "trigger": {
+    "failed_test": "TestKernelNamedNAT46TargetOwnership",
+    "failure": "synthetic routed packet was not delivered",
+    "first_kernel_suite_seconds": 520.915,
+    "kernel_job": 120878466956,
+    "workflow_run": 40096063484
+  },
+  "validation": {
+    "actionlint": "pass",
+    "baseline": "Reproduced the hosted failure in a new empty user/network namespace.",
+    "evidence_sha256": {
+      "policy-nat46-packet-trace.log": "3139b624bf58d676a9d11fa23b5c65b1f349845505a66fe2292675cf9f84231d",
+      "policy-nat46-target-fixed.log": "53a6743bfe3618687f5389ff2559f98af997ff2ad25ae6596634812aa70d8530",
+      "policy-nat46-target-reproduction.log": "6767384062aae614428d6e0407c58c56039ee48914ced688e3962be03e74e442",
+      "policy-phase-b-hosted-kernel-failure.log": "62daa9f50237b1281a6e5b6462d218668b246f4561936ef86c3e098372d15bc3"
+    },
+    "gofmt": "pass",
+    "trace": "The IPv6 forward packet passed its ownership gate. The IPv4 return packet was visible at netdev ingress and never reached inet forwarding.",
+    "whitespace": "pass",
+    "with_return_route": "The original delivery failure is eliminated and execution reaches later privileged mutation probes. Those probes require the hosted initial-user-namespace capabilities; the local nested user namespace rejects payload mutation. Full exact-head hosted validation remains required."
+  },
+  "workflow_change": "Allow 30 minutes for the two required cold kernel suites; the prior shared 10-minute budget was almost consumed by the first suite alone. Required jobs and assertions are unchanged."
+}
