@@ -110,6 +110,69 @@ func fullRulesetFixture(t testing.TB) (*guardLayout, []byte) {
 	return layout, encoded
 }
 
+func TestReviewedLargeHelperKeepsProtectedInventoryBound(t *testing.T) {
+	t.Parallel()
+	layout, listing := fullRulesetFixture(t)
+	// These additional expectations are fixed test code. They are not copied
+	// from an observation, and grant no packet permission.
+	layout.inspectionSchemas = map[string]*guardTableSchema{}
+	for _, family := range []string{"inet", "netdev"} {
+		base := *layout
+		base.inspectionSchemas = nil
+		schema, err := base.schema(family)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layout.inspectionSchemas[family] = schema
+	}
+	objects, err := decodeRulesetListing(t.Context(), listing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendObject := func(kind string, fields map[string]any) {
+		raw, err := json.Marshal(map[string]any{kind: fields})
+		if err != nil {
+			t.Fatal(err)
+		}
+		objects = append(objects, raw)
+	}
+	const chain = "capacity_padding"
+	header := map[string]any{"family": "inet", "table": ownedTable, "name": chain}
+	layout.inspectionSchemas["inet"].chains[chain] = header
+	appendObject("chain", map[string]any{"family": "inet", "table": ownedTable, "name": chain, "handle": 199999})
+	for index := range maximumRulesetObjects {
+		body := []any{map[string]any{"drop": nil}}
+		layout.inspectionSchemas["inet"].rules[chain] = append(layout.inspectionSchemas["inet"].rules[chain], body)
+		appendObject("rule", map[string]any{"family": "inet", "table": ownedTable, "chain": chain, "handle": 200000 + index, "expr": body})
+	}
+	encode := func() []byte {
+		data, err := json.Marshal(map[string]any{"nftables": objects})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	contract := reviewedRulesetFixture(t)
+	if _, err := contract.inspect(t.Context(), layout, encode()); err != nil {
+		t.Fatal("complete code-owned helper was charged against the protected allowance", err)
+	}
+	if _, _, err := inspectSealingGuards(t.Context(), layout, encode()); err != nil {
+		t.Fatal("complete helper prevented scoped sealing inspection", err)
+	}
+	// Remove one owned rule so the total still fits the derived combined
+	// bound. The protected inventory must independently reject 8,193 objects.
+	objects = objects[:len(objects)-1]
+	for index := len(reviewedNativeObjects(t)); index <= maximumRulesetObjects; index++ {
+		appendObject("counter", map[string]any{"family": "inet", "table": "reviewed_floor", "name": fmt.Sprintf("over_budget_%d", index), "handle": 400000 + index, "packets": 0, "bytes": 0})
+	}
+	if _, err := contract.inspect(t.Context(), layout, encode()); err == nil || !strings.Contains(err.Error(), "reviewed object inventory size invalid") {
+		t.Fatal("helper allowance was borrowed by the protected inventory", err)
+	}
+	if _, _, err := inspectSealingGuards(t.Context(), layout, encode()); err == nil || !strings.Contains(err.Error(), "sealing protected inventory size invalid") {
+		t.Fatal("sealing inspection lost the separate protected bound", err)
+	}
+}
+
 func TestReviewedRulesetMatchesCompleteListing(t *testing.T) {
 	t.Parallel()
 	contract := reviewedRulesetFixture(t)

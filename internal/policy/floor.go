@@ -8,6 +8,7 @@ import (
 
 type floorFlow struct {
 	mac       string
+	incoming  string
 	placement Role
 	rule      Rule
 	device    netip.Addr
@@ -21,10 +22,10 @@ func (compiler *Compiler) floor(flow floorFlow) string {
 		return "P04_non_host_zone_address"
 	}
 	peerRole := roleFor(compiler.baseline, peer)
-	if placement != Untrusted || peerRole == Security {
+	if compiler.baseline.NetworkModel == nil && (placement != Untrusted || peerRole == Security) {
 		return "P07_security_router_owned"
 	}
-	if peerRole == Assessment || peerRole == Guest || peerRole == Unknown {
+	if compiler.baseline.NetworkModel == nil && (peerRole == Assessment || peerRole == Guest || peerRole == Unknown) {
 		return "P07_isolated_or_unclassified_peer"
 	}
 	if peerRole == placement {
@@ -33,7 +34,7 @@ func (compiler *Compiler) floor(flow floorFlow) string {
 	if peerRole == Internet && rule.Direction != FromDevice {
 		return "P09_unsolicited_wan"
 	}
-	if port == 53 || rule.Protocol == "udp" && port == 123 {
+	if compiler.baseline.NetworkModel == nil && (port == 53 || rule.Protocol == "udp" && port == 123) {
 		return "P06_router_dns_ntp"
 	}
 	for _, blocks := range [][]NetworkBlock{compiler.baseline.ProtectedNetworks, compiler.baseline.RetainedBlocks} {
@@ -61,6 +62,12 @@ func (compiler *Compiler) floor(flow floorFlow) string {
 		if matchesProtocol && matchesPort && matchesEndpoint {
 			return block.ProtectionID + "_protected_endpoint"
 		}
+	}
+	if compiler.baseline.NetworkModel != nil {
+		if !compiler.baseline.DirectoryGrantNetwork(placement) {
+			return "unmanaged_directory_network"
+		}
+		return compiler.networkFloor(flow, flow.incoming)
 	}
 	return ""
 }

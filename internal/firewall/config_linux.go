@@ -39,6 +39,7 @@ type helperConfig struct {
 	RequestSocket      string           `json:"request_socket"`
 	StatusSocket       string           `json:"status_socket"`
 	ExpectedGeneration writerGeneration `json:"expected_generation"`
+	NAT64Runtime       *helperProfile   `json:"nat64_runtime,omitempty"`
 }
 
 type helperProfile struct {
@@ -57,7 +58,7 @@ func decodeHelperConfig(ctx context.Context, data []byte) (helperConfig, error) 
 		"schema_version", "mode", "profile", "generation_directory", "state_directory", "nft_executable",
 		"reader_uid", "operator_uid", "request_timeout_ms", "request_socket", "status_socket", "expected_generation",
 	}
-	if err := strictjson.Object(data, keys, []string{"binding_source", "observer_uid", "observations_socket"}, maximumHelperConfig); err != nil {
+	if err := strictjson.Object(data, keys, []string{"binding_source", "observer_uid", "observations_socket", "nat64_runtime"}, maximumHelperConfig); err != nil {
 		return helperConfig{}, profileFailure("helper configuration structure invalid", err)
 	}
 	object := map[string]json.RawMessage{}
@@ -66,6 +67,11 @@ func decodeHelperConfig(ctx context.Context, data []byte) (helperConfig, error) 
 	}
 	if err := strictjson.Object(object["profile"], []string{"directory", "sha256"}, nil, maximumHelperConfig); err != nil {
 		return helperConfig{}, profileFailure("helper profile structure invalid", err)
+	}
+	if runtime := object["nat64_runtime"]; len(runtime) != 0 {
+		if err := strictjson.Object(runtime, []string{"directory", "sha256"}, nil, maximumHelperConfig); err != nil {
+			return helperConfig{}, profileFailure("helper NAT64 runtime structure invalid", err)
+		}
 	}
 	if _, err := decodeWriterGeneration(object["expected_generation"]); err != nil {
 		return helperConfig{}, profileFailure("helper generation invalid", err)
@@ -106,10 +112,16 @@ func (c helperConfig) validate() error {
 	if !c.ExpectedGeneration.Ready {
 		return errors.New("firewall: helper expected generation must be ready")
 	}
+	if c.NAT64Runtime != nil && !generationHash(c.NAT64Runtime.SHA256) {
+		return errors.New("firewall: invalid NAT64 runtime digest pin")
+	}
 	for _, path := range []string{c.Profile.Directory, c.GenerationDir, c.StateDir, c.NFTExecutable} {
 		if !helperPath(path, 4096) {
 			return errors.New("firewall: helper requires clean absolute private resource paths")
 		}
+	}
+	if c.NAT64Runtime != nil && !helperPath(c.NAT64Runtime.Directory, 4096) {
+		return errors.New("firewall: NAT64 runtime requires a clean absolute manifest path")
 	}
 	validSockets := helperPath(c.RequestSocket, 107) && helperPath(c.StatusSocket, 107)
 	if !validSockets || c.RequestSocket == c.StatusSocket {
@@ -118,6 +130,9 @@ func (c helperConfig) validate() error {
 	// State owns an exclusive .lock; resources must not share/overlap private
 	// roots. Socket access must not require exposing state/profile directories.
 	directories := []string{c.Profile.Directory, c.GenerationDir, c.StateDir}
+	if c.NAT64Runtime != nil {
+		directories = append(directories, c.NAT64Runtime.Directory)
+	}
 	for i, directory := range directories {
 		for _, other := range directories[i+1:] {
 			if helperContains(directory, other) || helperContains(other, directory) {

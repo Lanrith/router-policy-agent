@@ -182,6 +182,11 @@ func (s *Store) write(ctx context.Context, document Document) (result error) {
 	if err != nil || len(data) > MaximumSize {
 		return errors.New("state: invalid serialized state")
 	}
+	return s.writeFile(ctx, filename, data)
+}
+
+// Only code-owned filenames reach this operation while the store gate is held.
+func (s *Store) writeFile(ctx context.Context, target string, data []byte) (result error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -231,7 +236,7 @@ func (s *Store) write(ctx context.Context, document Document) (result error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.root.Rename(name, filename); err != nil {
+	if err := s.root.Rename(name, target); err != nil {
 		return fmt.Errorf("state: replace state: %w", err)
 	}
 	if err := directory.Sync(); err != nil {

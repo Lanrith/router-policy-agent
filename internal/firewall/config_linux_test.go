@@ -160,6 +160,26 @@ func TestHelperConfigShadowSourceRequiresExplicitShadowMode(t *testing.T) {
 	}
 }
 
+func TestHelperConfigPinsOptionalNAT64RuntimeIndependently(t *testing.T) {
+	t.Parallel()
+	config := helperConfigFixture()
+	config.NAT64Runtime = &helperProfile{Directory: "/etc/router-policy-agent/nat64-runtime", SHA256: strings.Repeat("c", 64)}
+	got, err := decodeHelperConfig(t.Context(), helperConfigBytes(t, config))
+	if err != nil || got.NAT64Runtime == nil || *got.NAT64Runtime != *config.NAT64Runtime {
+		t.Fatal("valid independent NAT64 runtime pin rejected", err)
+	}
+	valid := helperConfigBytes(t, config)
+	for _, changed := range [][]byte{
+		[]byte(strings.Replace(string(valid), `"nat64_runtime":{`, `"nat64_runtime":{"yaml":"owner.yaml",`, 1)),
+		[]byte(strings.Replace(string(valid), strings.Repeat("c", 64), strings.Repeat("C", 64), 1)),
+		[]byte(strings.Replace(string(valid), `"directory":"/etc/router-policy-agent/nat64-runtime"`, `"directory":"etc/router-policy-agent/nat64-runtime"`, 1)),
+	} {
+		if decoded, decodeErr := decodeHelperConfig(t.Context(), changed); decodeErr == nil || decoded != (helperConfig{}) {
+			t.Fatal("invalid NAT64 runtime helper pin accepted", string(changed))
+		}
+	}
+}
+
 func TestHelperConfigurationCancellationAndSupervision(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())

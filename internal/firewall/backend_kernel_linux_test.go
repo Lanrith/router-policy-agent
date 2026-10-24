@@ -36,13 +36,7 @@ table netdev backend_endpoints {
 }
 `
 
-func backendPacketProfileFixture(t testing.TB) (*routerProfile, string) {
-	t.Helper()
-	profile, program, _ := backendPacketProfileDataFixture(t)
-	return profile, program
-}
-
-func backendPacketProfileDataFixture(t testing.TB) (*routerProfile, string, []byte) {
+func backendPacketProfileDataFixture(t testing.TB, named ...bool) (*routerProfile, string, []byte) {
 	t.Helper()
 	var artifact struct {
 		Schema  int               `json:"schema_version"`
@@ -96,13 +90,34 @@ func backendPacketProfileDataFixture(t testing.TB) (*routerProfile, string, []by
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(named) != 0 && named[0] {
+		model, err := policy.DecodeBaseline(baseline)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// This fixture exercises physical ownership and writer/floor fences.
+		// Keep unrelated legacy translator examples out of the named model;
+		// native NAT64 requires its own explicit source-pool geometry.
+		model.NAT46 = model.NAT46[:0]
+		model.NAT46Pools = model.NAT46Pools[:0]
+		model.NAT64 = model.NAT64[:0]
+		model.Zones = []policy.Zone{model.Zones[0], model.Zones[3]}
+		model.NetworkModel = &policy.NetworkModel{SchemaVersion: 1, UplinkInterface: "wan",
+			ManagedNetworks: []policy.Role{policy.Untrusted}, Rules: []policy.NetworkRule{
+				{Action: "allow", Authorization: "directory", Protocol: "any", From: []policy.NetworkSelector{{}}, To: []policy.NetworkSelector{{}}},
+			}}
+		baseline, err = json.Marshal(model)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	data, err := json.Marshal(profileEnvelope{SchemaVersion: 1, Baseline: baseline, ReviewedRuleset: reviewed})
 	if err != nil {
 		t.Fatal(err)
 	}
 	profile, err := decodePinnedProfile(t.Context(), data, routerProfileDigest(data))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v: %v", err, errors.Unwrap(err))
 	}
 	program := strings.Replace(reviewedKernelFixture, "  counter drop", backendKernelExtra+"  counter drop", 1)
 	if program == reviewedKernelFixture || !inserted {
@@ -111,10 +126,10 @@ func backendPacketProfileDataFixture(t testing.TB) (*routerProfile, string, []by
 	return profile, program + backendEndpointProgram, data
 }
 
-func setupBackendPacketFixture(ctx context.Context, t *testing.T) (*guardedBackend, *os.Root) {
+func setupBackendPacketFixture(ctx context.Context, t *testing.T, named ...bool) (*guardedBackend, *os.Root) {
 	t.Helper()
 	setupPacketLinks(ctx, t)
-	profile, routerProgram := backendPacketProfileFixture(t)
+	profile, routerProgram, _ := backendPacketProfileDataFixture(t, named...)
 	for _, name := range profile.layout.interfaces {
 		if slices.Contains([]string{"lan10", "lan13"}, name) {
 			continue

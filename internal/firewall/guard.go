@@ -29,6 +29,9 @@ const (
 // bootstrap paths, translator legs and the separate router-table bridge. This layout
 // alone must not be activated as a complete router policy.
 type guardLayout struct {
+	inspectionSchemas map[string]*guardTableSchema
+	native            *nativeAccess
+	ownership         bool
 	interfaces        []string
 	managedInterfaces []string
 	controllers       []controllerLeg
@@ -51,7 +54,7 @@ func newGuardLayout(baseline policy.Baseline) (*guardLayout, error) {
 	managed := make([]string, 0)
 	for _, zone := range validated.Zones {
 		interfaces = append(interfaces, zone.Interfaces...)
-		if zone.Role == policy.Untrusted {
+		if validated.DirectoryGrantNetwork(zone.Role) {
 			managed = append(managed, zone.Interfaces...)
 		}
 	}
@@ -64,6 +67,7 @@ func newGuardLayout(baseline policy.Baseline) (*guardLayout, error) {
 	interfaces = slices.Compact(interfaces)
 	slices.Sort(managed)
 	return &guardLayout{
+		ownership:  validated.NetworkModel != nil,
 		interfaces: interfaces, managedInterfaces: managed, controllers: controllerLegs(validated),
 		controllerAliases: controllerAliasIdentities(validated),
 		translationPaths:  deviceTranslationPaths(validated),
@@ -81,6 +85,13 @@ func (layout *guardLayout) program(ctx context.Context) ([]byte, error) {
 	}
 	lines := []string{"table inet " + ownedTable + " {"}
 	lines = append(lines, permanentGuardSets()...)
+	if layout.ownership {
+		lines = append(lines, ownershipDefinitions("inet")...)
+		lines = append(lines, ownershipEpochDefinitions()...)
+		lines = append(lines, configurationEpochDefinitions()...)
+		lines = append(lines, epochChannelDefinitions(false, "inet")...)
+		lines = append(lines, epochChannelDefinitions(true, "inet")...)
+	}
 	for _, name := range grantSets {
 		addressType := "ipv6_addr"
 		if ipv4Set(name) {
@@ -92,48 +103,74 @@ func (layout *guardLayout) program(ctx context.Context) ([]byte, error) {
 		)
 	}
 	lines = append(lines, layout.translatedSetDefinitions("inet")...)
-	lines = append(lines, "chain guard_forward { type filter hook forward priority -150; policy accept;",
-		"meta mark set meta mark & "+guardMarkKeep)
-	lines = append(lines, layout.controllerForwardRules("return", false)...)
-	translated, _ := layout.translatedForward("return", false)
-	lines = append(lines, translated...)
-	lines = append(lines, guardLookups("return")...)
-	lines = append(lines, layout.controllerIdentityDrops()...)
-	lines = append(lines, guardClassificationDrops()...)
-	lines = append(lines, "}",
-		// The router's separate table provisionally accepts fixed tags only
-		// after its protected checks. A cross-table jump is not possible. This
-		// later base chain rechecks the actual lease inside our own table.
-		"chain guard_confirm { type filter hook forward priority 150; policy accept;",
-		"jump permit_flow",
-	)
-	for _, tag := range []string{fromOriginalTag, fromReplyTag, toOriginalTag, toReplyTag} {
-		// Keep the provisional tag until lookup succeeds. If another hook
-		// changed the tuple to an otherwise unclassified endpoint, a stale
-		// tag must still deny rather than fall through the accept policy.
-		lines = append(lines, "meta mark & 0xff000000 == "+tag+" drop")
+	if layout.native != nil {
+		lines = append(lines, nativeSourceDefinitions("inet")...)
+		lines = append(lines, nativeIDGrantDefinitions("inet")...)
+		publications, err := layout.nat46PublicationDefinitions(ctx, "inet")
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, publications...)
+		lines = append(lines, layout.native.inetText()...)
+	} else {
+		lines = append(lines, "chain guard_forward { type filter hook forward priority -150; policy accept;",
+			"meta mark set meta mark & "+guardMarkKeep)
+		if layout.ownership {
+			lines = append(lines, "jump validate_source")
+		}
+		lines = append(lines, layout.controllerForwardRules("return", false)...)
+		translated, _ := layout.translatedForward("return", false)
+		lines = append(lines, translated...)
+		lines = append(lines, guardLookups("return")...)
+		lines = append(lines, layout.controllerIdentityDrops()...)
+		lines = append(lines, guardClassificationDrops()...)
+		lines = append(lines, "}",
+			// The router's separate table provisionally accepts fixed tags only
+			// after its protected checks. A cross-table jump is not possible. This
+			// later base chain rechecks the actual lease inside our own table.
+			"chain guard_confirm { type filter hook forward priority 150; policy accept;",
+			"jump permit_flow",
+		)
+		for _, tag := range []string{fromOriginalTag, fromReplyTag, toOriginalTag, toReplyTag} {
+			// Keep the provisional tag until lookup succeeds. If another hook
+			// changed the tuple to an otherwise unclassified endpoint, a stale
+			// tag must still deny rather than fall through the accept policy.
+			lines = append(lines, "meta mark & 0xff000000 == "+tag+" drop")
+		}
+		lines = append(lines, layout.controllerTagDrops()...)
+		translatedDrops, _ := layout.translatedTagDrops()
+		lines = append(lines, translatedDrops...)
+		lines = append(lines, layout.controllerIdentityDrops()...)
+		lines = append(lines, guardClassificationDrops()...)
+		lines = append(lines, "}", "chain permit_flow {")
+		if layout.ownership {
+			lines = append(lines, "jump validate_source")
+		}
+		lines = append(lines, layout.controllerForwardRules("accept", true)...)
+		translated, _ = layout.translatedForward("accept", true)
+		lines = append(lines, translated...)
+		lines = append(lines, guardLookups("accept")...)
+		lines = append(lines, "}")
 	}
-	lines = append(lines, layout.controllerTagDrops()...)
-	translatedDrops, _ := layout.translatedTagDrops()
-	lines = append(lines, translatedDrops...)
-	lines = append(lines, layout.controllerIdentityDrops()...)
-	lines = append(lines, guardClassificationDrops()...)
-	lines = append(lines, "}", "chain permit_flow {")
-	lines = append(lines, layout.controllerForwardRules("accept", true)...)
-	translated, _ = layout.translatedForward("accept", true)
-	lines = append(lines, translated...)
-	lines = append(lines, guardLookups("accept")...)
-	lines = append(lines, "}", "}", "table netdev "+ownedTable+" {",
+	if layout.ownership {
+		lines = append(lines, ownershipSourceRules()...)
+	}
+	lines = append(lines, "}", "table netdev "+ownedTable+" {",
 		fmt.Sprintf("set %s { type ether_addr; size %d; }", cohortSet, maximumCohortSize))
+	if layout.ownership {
+		lines = append(lines, ownershipDefinitions("netdev")...)
+		lines = append(lines, epochChannelDefinitions(false, "netdev")...)
+		lines = append(lines, epochChannelDefinitions(true, "netdev")...)
+	}
 	for _, name := range grantSets {
 		addressType := "ipv6_addr"
 		if ipv4Set(name) {
 			addressType = "ipv4_addr"
 		}
-		// The extracted mark has a 32-bit datatype. Its bounded numeric port
-		// value is the same as the 16-bit forward/conntrack listener value.
+		// Physical egress checks the actual transport listener. No runtime
+		// bitwise combination of QoS marks and conntrack ports is required.
 		lines = append(lines, guardSetDefinition(egressSet(name),
-			"ifname . ether_addr . "+addressType+" . "+addressType+" . mark"))
+			"ifname . ether_addr . "+addressType+" . "+addressType+" . inet_service"))
 	}
 	lines = append(lines, layout.translatedSetDefinitions("netdev")...)
 	for index, name := range layout.interfaces {
@@ -141,16 +178,27 @@ func (layout *guardLayout) program(ctx context.Context) ([]byte, error) {
 			"chain guard_egress_%d { type filter hook egress device %q priority 0; policy accept;",
 			index, name,
 		))
+		if layout.ownership && (name != "nat46" || layout.native == nil || layout.native.nat46Transport == nil) {
+			if layout.native != nil {
+				lines = append(lines, nativeRulesText(layout.native.corePhysicalEgress(name))...)
+			}
+			lines = append(lines, "jump validate_target")
+		}
+		if layout.native != nil {
+			lines = append(lines, layout.native.egressText(name)...)
+			lines = append(lines, "}")
+			continue
+		}
 		lines = append(lines, layout.controllerEgressRules(name)...)
-		translated, _ = layout.translatedEgress(name)
+		translated, _ := layout.translatedEgress(name)
 		lines = append(lines, translated...)
 		for _, set := range grantSets {
 			_, incoming := guardTags(set)
 			family, protocol := guardProtocol(set)
 			lines = append(lines, fmt.Sprintf(
-				"meta l4proto %s meta mark & 0xff000000 == %s "+
-					"oifname . ether daddr . %s daddr . %s saddr . (meta mark & 0x0000ffff) @%s return",
-				protocol, incoming, family, family, egressSet(set),
+				"meta l4proto %s meta mark & 0xff00ffff == %s "+
+					"oifname . ether daddr . %s daddr . %s saddr . %s %s @%s return",
+				protocol, incoming, family, family, protocol, guardEgressPort(set), egressSet(set),
 			))
 		}
 		// A projected IP permit must not transfer to an unclassified new MAC.
@@ -162,8 +210,23 @@ func (layout *guardLayout) program(ctx context.Context) ([]byte, error) {
 		)
 		// Controller tags cannot fall through on the wrong physical egress.
 		lines = append(lines, layout.controllerTagDrops()...)
+		translatedDrops, _ := layout.translatedTagDrops()
 		lines = append(lines, translatedDrops...)
 		lines = append(lines, "}")
+	}
+	if layout.native != nil {
+		lines = append(lines, nativeSourceDefinitions("netdev")...)
+		lines = append(lines, nativeGrantDefinitions()...)
+		publications, err := layout.nat46PublicationDefinitions(ctx, "netdev")
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, publications...)
+		lines = append(lines, fmt.Sprintf("set %s { type ipv4_addr; size %d; }", classified4Set, maximumTupleCount), fmt.Sprintf("set %s { type ipv6_addr; size %d; }", classified6Set, maximumTupleCount))
+		lines = append(lines, layout.native.netdevText()...)
+	}
+	if layout.ownership {
+		lines = append(lines, ownershipTargetRules()...)
 	}
 	lines = append(lines, "}")
 	if err := ctx.Err(); err != nil {
@@ -238,13 +301,23 @@ func guardLookups(verdict string) []string {
 		lines = append(lines,
 			fmt.Sprintf("meta l4proto %s ct state { new, established } ct direction %s "+
 				"iifname . ether saddr . %s saddr . %s daddr . ct original proto-dst @%s "+
-				"meta mark set (meta mark & %s) | ct original proto-dst meta mark set meta mark | %s %s",
+				"meta mark set meta mark & %s meta mark set meta mark | %s %s",
 				protocol, sourceDirection, family, family, name, guardMarkKeep, outgoing, verdict),
 			fmt.Sprintf("meta l4proto %s ct state { new, established } ct direction %s "+
 				"oifname . %s daddr . %s saddr . ct original proto-dst @%s "+
-				"meta mark set (meta mark & %s) | ct original proto-dst meta mark set meta mark | %s %s",
+				"meta mark set meta mark & %s meta mark set meta mark | %s %s",
 				protocol, targetDirection, family, family, inboundSet(name), guardMarkKeep, incoming, verdict),
 		)
 	}
 	return lines
+}
+
+// The incoming to-device original carries the listener as dport; an incoming
+// from-device reply carries it as sport. These fields remain available at
+// physical egress, unlike conntrack metadata on the netdev hook.
+func guardEgressPort(name string) string {
+	if strings.HasPrefix(name, "lease_from") {
+		return "sport"
+	}
+	return "dport"
 }

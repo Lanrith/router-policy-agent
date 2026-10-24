@@ -85,7 +85,7 @@ func decodePinnedProfile(ctx context.Context, data []byte, pin string) (*routerP
 	if err != nil {
 		return nil, profileFailure("compiler construction failed", err)
 	}
-	layout, err := newGuardLayout(baseline)
+	layout, err := newInstalledGuardLayout(ctx, baseline)
 	if err != nil {
 		return nil, profileFailure("guard construction failed", err)
 	}
@@ -95,6 +95,29 @@ func decodePinnedProfile(ctx context.Context, data []byte, pin string) (*routerP
 	return &routerProfile{
 		digest: digest, baseline: baseline, renderer: renderer, layout: layout, ruleset: ruleset,
 	}, nil
+}
+
+func newInstalledGuardLayout(ctx context.Context, baseline policy.Baseline) (*guardLayout, error) {
+	if ctx == nil {
+		return nil, errors.New("firewall: missing installed layout context")
+	}
+	if baseline.NetworkModel == nil {
+		return newGuardLayout(baseline)
+	}
+	if len(baseline.NAT46) != 0 || len(baseline.NAT46Pools) != 0 {
+		return newNativeNAT46AccessLayout(ctx, baseline)
+	}
+	if len(baseline.NAT64) != 0 {
+		return newNativeNAT64AggregateAccessLayout(ctx, baseline)
+	}
+	layout, err := newNativeAccessLayout(ctx, baseline)
+	if err != nil {
+		return nil, err
+	}
+	if err := layout.freezeInspectionSchemas(ctx); err != nil {
+		return nil, err
+	}
+	return layout, ctx.Err()
 }
 
 // Profile paths and policy data stay out of printable diagnostics. Trusted

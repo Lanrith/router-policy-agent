@@ -28,8 +28,9 @@ const (
 // Persistence exposes normal state operations only. Initialization and reset
 // are deliberately absent. Both functions must honor context cancellation.
 type Persistence struct {
-	Load func(context.Context) (state.Document, error)
-	Save func(context.Context, state.Document) error
+	Load                  func(context.Context) (state.Document, error)
+	Save                  func(context.Context, state.Document) error
+	AdvanceOwnershipEpoch func(context.Context) (uint32, error)
 }
 
 // Enforcement is trusted helper wiring, never reader-supplied implementation.
@@ -43,8 +44,12 @@ type Persistence struct {
 // from its diagnostic snapshot or a newly sampled UTC clock.
 // A successful callback is not itself packet-level evidence of those properties.
 type Enforcement struct {
-	Seal  func(context.Context, state.Classification) error
-	Apply func(context.Context, policy.Authorization, state.Classification) error
+	Seal                 func(context.Context, state.Classification) error
+	Apply                func(context.Context, policy.Authorization, state.Classification) error
+	RefreshOwnership     func(context.Context, policy.Ownership) error
+	ClearOwnership       func(context.Context) error
+	RefreshConfiguration func(context.Context, policy.OwnerConfiguration) error
+	ClearConfiguration   func(context.Context) error
 }
 
 // Options contains privileged local dependencies. Bindings must reread an
@@ -64,17 +69,23 @@ type Options struct {
 // The caller retains ownership of the persistent store and backend resources.
 // Engine must not be copied or used before Start succeeds.
 type Engine struct {
-	compiler         *policy.Compiler
-	options          Options
-	gate             chan struct{}
-	started          bool
-	clock            helperClock
-	lease            time.Duration
-	maximumDevices   int
-	startupTime      time.Time
-	startupDirectory time.Time
-	observation      observation
-	provenance       atomic.Pointer[ipc.ObservationSnapshot]
+	compiler             *policy.Compiler
+	options              Options
+	gate                 chan struct{}
+	started              bool
+	clock                helperClock
+	lease                time.Duration
+	maximumDevices       int
+	startupTime          time.Time
+	startupDirectory     time.Time
+	observation          observation
+	provenance           atomic.Pointer[ipc.ObservationSnapshot]
+	named                bool
+	ownershipFingerprint string
+	ownershipEpoch       uint32
+	configurationEpoch   uint32
+	classification       state.Classification
+	classificationFailed bool
 }
 
 // New copies and validates the helper-owned baseline. Shadow mode rejects
@@ -83,7 +94,14 @@ func New(baseline policy.Baseline, options Options) (*Engine, error) {
 	validMode := options.Mode == Shadow || options.Mode == Enforce
 	validFirewall := options.Mode == Enforce && options.Firewall.Seal != nil && options.Firewall.Apply != nil ||
 		options.Mode == Shadow && options.Firewall.Seal == nil && options.Firewall.Apply == nil
-	if !validMode || !validFirewall || options.State.Load == nil || options.State.Save == nil ||
+	named := baseline.NetworkModel != nil
+	validOwnership := options.Mode == Enforce && named && options.Firewall.RefreshOwnership != nil && options.Firewall.ClearOwnership != nil &&
+		options.Firewall.RefreshConfiguration != nil && options.Firewall.ClearConfiguration != nil ||
+		(options.Mode == Shadow || !named) && options.Firewall.RefreshOwnership == nil && options.Firewall.ClearOwnership == nil &&
+			options.Firewall.RefreshConfiguration == nil && options.Firewall.ClearConfiguration == nil
+	validEpoch := options.Mode == Enforce && named && options.State.AdvanceOwnershipEpoch != nil ||
+		(options.Mode == Shadow || !named) && options.State.AdvanceOwnershipEpoch == nil
+	if !validMode || !validFirewall || !validOwnership || !validEpoch || options.State.Load == nil || options.State.Save == nil ||
 		options.Bindings == nil || options.Clock == nil {
 		return nil, errors.New("agent: invalid helper dependencies")
 	}
@@ -93,6 +111,7 @@ func New(baseline policy.Baseline, options Options) (*Engine, error) {
 	}
 	return &Engine{
 		compiler: compiler, options: options, gate: make(chan struct{}, 1),
+		named: named, classification: state.EmptyClassification(),
 		lease: time.Duration(baseline.LeaseSeconds) * time.Second, maximumDevices: baseline.MaximumDevices,
 		observation: observation{report: ipc.Report{
 			SchemaVersion: 1, Mode: string(options.Mode), HelperState: "not_started", PermitState: "unobserved",
@@ -114,6 +133,14 @@ func (engine *Engine) Start(ctx context.Context) error {
 	engine.started = false
 	engine.observation.report.HelperState = "startup_failed"
 	engine.observation.report.LastFailure = "startup_failed"
+	if engine.named && engine.options.Mode == Enforce {
+		if err := errors.Join(engine.options.Firewall.ClearOwnership(ctx), engine.options.Firewall.ClearConfiguration(ctx)); err != nil {
+			return err
+		}
+		engine.ownershipFingerprint = ""
+		engine.configurationEpoch = 0
+		engine.classificationFailed = false
+	}
 	if err := engine.seal(ctx, state.EmptyClassification()); err != nil {
 		return err
 	}
@@ -138,6 +165,15 @@ func (engine *Engine) Start(ctx context.Context) error {
 	}
 	if now.authorization.Before(document.Ledger.LastValidated) {
 		return errors.New("agent: unsafe startup clock")
+	}
+	if engine.named && engine.options.Mode == Enforce {
+		if err := engine.advanceOwnershipEpoch(ctx); err != nil {
+			return err
+		}
+		engine.configurationEpoch = engine.ownershipEpoch
+		if err := engine.refreshConfiguration(ctx); err != nil {
+			return err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -254,6 +290,9 @@ func (engine *Engine) Process(
 	if err := engine.options.State.Save(ctx, observed); err != nil {
 		return ipc.Receipt{}, fmt.Errorf("agent: persist address classification: %w", err)
 	}
+	if err := engine.refreshOwnership(ctx, bindings, classification); err != nil {
+		return ipc.Receipt{}, err
+	}
 	now, err = engine.now()
 	if err != nil {
 		return ipc.Receipt{}, err
@@ -336,7 +375,13 @@ func (engine *Engine) Stop(ctx context.Context) error {
 	defer engine.release()
 	engine.started = false
 	engine.observation.report.HelperState = "stopped"
-	return engine.seal(ctx, state.EmptyClassification())
+	var ownershipErr error
+	if engine.named && engine.options.Mode == Enforce {
+		ownershipErr = errors.Join(engine.options.Firewall.ClearOwnership(ctx), engine.options.Firewall.ClearConfiguration(ctx))
+		engine.ownershipFingerprint = ""
+		engine.configurationEpoch = 0
+	}
+	return errors.Join(ownershipErr, engine.seal(ctx, state.EmptyClassification()))
 }
 
 func (engine *Engine) seal(ctx context.Context, classification state.Classification) error {
@@ -345,9 +390,31 @@ func (engine *Engine) seal(ctx context.Context, classification state.Classificat
 		engine.observation.report.PermitState = "shadow"
 		return nil
 	}
-	owned, err := state.CloneClassification(classification)
+	owned, added, err := engine.classificationUnion(classification)
 	if err != nil {
 		return err
+	}
+	rotating := engine.named && (engine.classificationFailed || added && engine.configurationEpoch != 0)
+	var nextEpoch uint32
+	if rotating {
+		// Requests, source supervision and stop share the engine gate. Withdraw
+		// both positive channels before publishing even a MAC with no known IP.
+		// A failed transition requires Start; no later cleanup may republish a
+		// cached old epoch, even if a kernel operation committed then failed.
+		failed := engine.classificationFailed
+		engine.classificationFailed = true
+		engine.configurationEpoch = 0
+		engine.ownershipFingerprint = ""
+		engine.started = false
+		if err := errors.Join(engine.options.Firewall.ClearOwnership(ctx), engine.options.Firewall.ClearConfiguration(ctx)); err != nil {
+			return err
+		}
+		if !failed {
+			if err := engine.advanceOwnershipEpoch(ctx); err != nil {
+				return err
+			}
+			nextEpoch = engine.ownershipEpoch
+		}
 	}
 	if err := engine.options.Firewall.Seal(ctx, owned); err != nil {
 		engine.observation.report.PermitState = "unknown"
@@ -356,6 +423,16 @@ func (engine *Engine) seal(ctx context.Context, classification state.Classificat
 		// state, including an application that committed before reporting failure.
 		engine.observation.deadlines = []countdown{}
 		return err
+	}
+	engine.classification = owned
+	if rotating && nextEpoch != 0 {
+		engine.configurationEpoch = nextEpoch
+		if err := engine.refreshConfiguration(ctx); err != nil {
+			engine.configurationEpoch = 0
+			return errors.Join(err, engine.options.Firewall.ClearConfiguration(ctx))
+		}
+		engine.classificationFailed = false
+		engine.started = true
 	}
 	engine.observation.report.PermitState = "sealed"
 	engine.observation.deadlines = []countdown{}

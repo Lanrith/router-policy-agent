@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
@@ -115,6 +116,49 @@ func TestPinnedProfilesCannotExchangeAuthorization(t *testing.T) {
 	}
 	if first.digest == second.digest || first.ruleset.digest != second.ruleset.digest {
 		t.Fatal("whole-bundle identity did not bind catalog-only changes")
+	}
+}
+
+func TestPinnedProfileSelectsCompleteNativeTranslationLayout(t *testing.T) {
+	t.Parallel()
+	nat64Only := nat64TransportFixture(t)
+	secondPool := netip.MustParsePrefix("10.252.0.0/24")
+	nat64Only.NAT64 = append(nat64Only.NAT64, policy.NAT64{
+		ID: "nat64-private", Prefix: netip.MustParsePrefix("fdca:1a2b:e065::/96"), Scope: "private", SourcePool: &secondPool,
+	})
+	combined := nat46ForwardingBaseline(t)
+	combined.NAT64 = nat64Only.NAT64
+	for _, test := range []struct {
+		name       string
+		baseline   policy.Baseline
+		nat64Count int
+		nat46      bool
+	}{
+		{name: "native", baseline: nativeAccessBaseline(t)},
+		{name: "two NAT64 pools", baseline: nat64Only, nat64Count: 2},
+		{name: "both directions", baseline: combined, nat64Count: 2, nat46: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := json.Marshal(test.baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(profileEnvelope{
+				SchemaVersion: 1, Baseline: raw, ReviewedRuleset: json.RawMessage(reviewedArtifactFixture),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile, err := decodePinnedProfile(t.Context(), data, routerProfileDigest(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if profile.layout.native == nil || profile.layout.inspectionSchemas == nil ||
+				len(profile.layout.native.selectedNAT64Transports()) != test.nat64Count ||
+				(profile.layout.nat46Sources() != nil) != test.nat46 {
+				t.Fatal("pinned profile did not select its complete normalized native layout")
+			}
+		})
 	}
 }
 

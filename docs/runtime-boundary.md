@@ -913,7 +913,8 @@ discovery in this command.
 
 For a separately approved first installation only, run
 `router-policy-helper -config-directory PATH -initialize-state` without a binding
-directory. This initializes empty deny-only history under the exclusive state
+directory. This initializes empty deny-only history and a separate ownership
+sequence under the exclusive state
 lock. It refuses existing or corrupt history, releases ownership on failure,
 and never creates firewall guards, generation records or release pins. Runtime
 startup never calls it. Missing history after installation remains an error.

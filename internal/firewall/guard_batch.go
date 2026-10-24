@@ -6,18 +6,26 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/lanrith/router-policy-agent/internal/state"
-	"github.com/lanrith/router-policy-agent/internal/strictjson"
 )
 
 // preparedGuardBatch preserves the original renderer's preparation/age fence.
 // Only the guarded backend admits this schema after complete inspection under
 // the shared writer fence. The raw set-only executor still rejects it.
 type preparedGuardBatch struct {
-	batch            preparedBatch
-	classification   *state.Classification
-	translationPaths []deviceTranslationPath
+	native             bool
+	batch              preparedBatch
+	classification     *state.Classification
+	translationPaths   []deviceTranslationPath
+	sourcePublication  *nativeSourcePublication
+	sourceBaselineHash string
+	sourceUTC          time.Time
+	sourceAnchor       time.Time
+	nat46Model         *nativeNAT46Model
+	nat64Transport     *nativeNAT64Transport
+	nat64Transports    []*nativeNAT64Transport
 }
 
 type guardChanges struct {
@@ -317,37 +325,29 @@ func guardAdd(family, name string, values []json.RawMessage) change {
 }
 
 func decodeGuardChanges(data []byte) (guardChanges, error) {
-	if err := strictjson.Object(data, []string{"nftables"}, nil, maximumBatch); err != nil {
+	commands, err := decodeNftablesArray(data, maximumBatch)
+	if err != nil {
 		return guardChanges{}, err
 	}
-	var raw struct {
-		Commands []json.RawMessage `json:"nftables"`
-	}
-	if err := strictjson.Decode(data, &raw, maximumBatch); err != nil {
-		return guardChanges{}, err
-	}
-	if len(raw.Commands) < 3*len(grantSets) || len(raw.Commands) > 6*len(grantSets)+4+16 {
+	if len(commands) < 3*len(grantSets) || len(commands) > 8*len(grantSets)+6+16+2*len(nativeIDLeaseRefs()) {
 		return guardChanges{}, errors.New("firewall: guarded transaction size invalid")
 	}
-	decoded := guardChanges{Commands: make([]change, 0, len(raw.Commands))}
-	for _, command := range raw.Commands {
-		if err := strictjson.Object(command, nil, []string{"flush", "add"}, maximumBatch); err != nil {
-			return guardChanges{}, err
-		}
+	decoded := guardChanges{Commands: make([]change, 0, len(commands))}
+	for _, command := range commands {
 		object := map[string]json.RawMessage{}
-		if err := strictjson.Decode(command, &object, maximumBatch); err != nil || len(object) != 1 {
+		if err := json.Unmarshal(command, &object); err != nil || len(object) != 1 {
 			return guardChanges{}, errors.New("firewall: exact guarded operation required")
 		}
 		if value, exists := object["flush"]; exists {
 			var ref objectReference
-			if err := decodeNested(value, "set", &ref, []string{"family", "table", "name"}); err != nil {
+			if err := decodeValidatedNested(value, "set", &ref, []string{"family", "table", "name"}); err != nil {
 				return guardChanges{}, err
 			}
 			decoded.Commands = append(decoded.Commands, change{Flush: &setChange{Set: ref}})
 			continue
 		}
 		var value elements
-		if err := decodeNested(object["add"], "element", &value, []string{"family", "table", "name", "elem"}); err != nil {
+		if err := decodeValidatedNested(object["add"], "element", &value, []string{"family", "table", "name", "elem"}); err != nil {
 			return guardChanges{}, err
 		}
 		decoded.Commands = append(decoded.Commands, change{Add: &elementChange{Element: value}})

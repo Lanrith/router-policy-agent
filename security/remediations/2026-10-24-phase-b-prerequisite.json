@@ -1,0 +1,48 @@
+{
+  "approval": "Independent human GitHub review of the exact PR head is required. Owner source confirmation does not substitute for that review. The published update-record.json will bind the actual approval actor, review ID and successful validation runs.",
+  "base_sha": "7f7aac51abd1f99fe0f27b9b500adf1fdb9b2d55",
+  "confirmed_source": {
+    "base_sha": "821cce8935b24b0d682d4776b22688fbdde1fd41",
+    "owner_confirmed_intended_source": true,
+    "patch_sha256": "c4c4b59daf58c1be1869e64bdceb94ffda11cd217c479f6b518b56de699415c1",
+    "validated_source_tree": "fa4c9449cce7c80f30a26ac4bd501c92a35c43e3"
+  },
+  "kind": "platform-component-prerequisite",
+  "production_qualified": false,
+  "reason": "The merged Lanrith Phase B platform requires router-policy-profile and its matching policy runtime. Pinned immutable router-policy-agent v0.1.3 predates that implementation. Package compilation passed, then mandatory filesystem scan coverage blocked the missing compiler. Publish the reviewed corresponding component before updating the platform release pins.",
+  "repository": "Lanrith/router-policy-agent",
+  "required_hosted_validation": "Full current/previous toolchain, race/fuzz/coverage, isolated root UID and nftables kernel checks must pass on the exact PR head.",
+  "requires_human": true,
+  "schema": 1,
+  "scope": [
+    "image-owned policy profile compiler and package inclusion",
+    "named networks and ordered owner classification",
+    "matching guarded NAT64/NAT46 policy runtime",
+    "strict JSON, state and filesystem boundary prerequisites"
+  ],
+  "trigger": {
+    "failed_job": 120870889764,
+    "failed_workflow_run": 40087621769,
+    "immutable_failure_evidence": "https://github.com/Lanrith/lanrith/releases/tag/audit-component-interface-failure-20261024T124439Z",
+    "missing_command": "router-policy-profile",
+    "platform_head": "6eb8200ba49edb6a190a3a9af39c0fe5182864c3",
+    "platform_pull_request": "https://github.com/Lanrith/lanrith/pull/12"
+  },
+  "validation": {
+    "compiler": "Go 1.27.3",
+    "formatting": "gofmt applied to the pre-existing whitespace-only radius test difference",
+    "imported_package_vulnerabilities": 0,
+    "lint": "pinned golangci-lint 2.14.0: zero issues",
+    "logs_sha256": {
+      "go_race_shuffled_integration": "8cfea7b8f768059b92baf8ffaac83cccfd4894e86226cb3c04f88f052dda9f8c",
+      "go_unit_tests": "b86ecb24dc55c6ecef339ce1d971abee5e133c11eccabef1411eed2570053072",
+      "lint": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+      "vulnerability_scan": "b5ae54ddcfa4cb39e85f84ad2d9e43556bd817c480eaab2a71bab63bfc29353b"
+    },
+    "module_inventory_only_findings": 1,
+    "public_source_boundary_files": 439,
+    "race_shuffled_integration_tests": "pass; local non-root environment",
+    "reachable_vulnerabilities": 0,
+    "unit_tests": "pass"
+  }
+}

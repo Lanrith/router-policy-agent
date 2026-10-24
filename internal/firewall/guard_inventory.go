@@ -45,6 +45,12 @@ func (inventory *guardInventory) checkMirrors(
 	if err != nil {
 		return err
 	}
+	if inventory.native {
+		expanded, err = expandNativeGuards(ctx, expanded)
+		if err != nil {
+			return err
+		}
+	}
 	expected, err := decodeGuardChanges(expanded)
 	if err != nil {
 		return err
@@ -71,7 +77,11 @@ func (inventory *guardInventory) checkMirrors(
 			}
 		}
 	}
-	for _, ref := range translatedGrantRefs(inventory.translationPaths) {
+	additional := translatedGrantRefs(inventory.translationPaths)
+	if inventory.native {
+		additional = append(additional, nativeLeaseRefs()...)
+	}
+	for _, ref := range additional {
 		observation := inet
 		if ref.Family == "netdev" {
 			observation = netdev
@@ -84,6 +94,20 @@ func (inventory *guardInventory) checkMirrors(
 		if err := sameGuardElements(ctx, actual, wanted[ref]); err != nil {
 			return err
 		}
+	}
+	if inventory.native {
+		count, err := inspectNativeIDGrants(ctx, logical, inet, netdev)
+		if err != nil {
+			return err
+		}
+		inventory.leases += count
+	}
+	if inventory.nat46Model != nil {
+		count, err := inventory.nat46Model.inspectTargetGrants(ctx, logical, inet, netdev)
+		if err != nil {
+			return err
+		}
+		inventory.leases += count
 	}
 	return inventory.checkAddressAdditions(ctx, wanted, false)
 }
@@ -181,10 +205,24 @@ func (inventory *guardInventory) checkPreparedReplacement(ctx context.Context, p
 	if prepared == nil {
 		return errors.New("firewall: missing prepared guarded replacement")
 	}
-	if inventory == nil || !slices.Equal(inventory.translationPaths, prepared.translationPaths) {
+	if inventory == nil || inventory.native != prepared.native || !slices.Equal(inventory.translationPaths, prepared.translationPaths) {
 		return errors.New("firewall: translated preparation differs from inspected root geometry")
 	}
-	return inventory.checkGuardReplacement(ctx, prepared.batch.data, prepared.classification)
+	if inventory.nat46Model != prepared.nat46Model {
+		return errors.New("firewall: nat46 preparation differs from inspected original geometry")
+	}
+	if err := validatePreparedGuardBatch(ctx, prepared); err != nil {
+		return err
+	}
+	data := prepared.batch.data
+	if prepared.native {
+		var err error
+		data, err = stripNativeGuards(data)
+		if err != nil {
+			return err
+		}
+	}
+	return inventory.checkValidatedGuardReplacement(ctx, data)
 }
 
 func (inventory *guardInventory) checkGuardReplacement(
@@ -201,6 +239,14 @@ func (inventory *guardInventory) checkGuardReplacement(
 	if err := validateMappedGuardBatch(ctx, data, classification, inventory.translationPaths); err != nil {
 		return err
 	}
+	return inventory.checkValidatedGuardReplacement(ctx, data)
+}
+
+// Both entry points above have independently rederived the complete mapped
+// program. Native validation includes that same mapped proof. Repeat only the
+// current inventory checks here; validating the same projections again adds
+// no authority. The process still rederives the whole program before execution.
+func (inventory *guardInventory) checkValidatedGuardReplacement(ctx context.Context, data []byte) error {
 	guarded, err := decodeGuardChanges(data)
 	if err != nil {
 		return err
@@ -220,11 +266,7 @@ func (inventory *guardInventory) checkGuardReplacement(
 			}
 		}
 	}
-	source, err := json.Marshal(logical)
-	if err != nil {
-		return errors.New("firewall: guarded replacement reconstruction failed")
-	}
-	if err := (&setInventory{cohort: inventory.cohort}).checkReplacement(ctx, source); err != nil {
+	if err := (&setInventory{cohort: inventory.cohort}).checkClassifiedGrantChanges(ctx, logical.Commands); err != nil {
 		return err
 	}
 	if err := inventory.checkInterfaces(ctx, logical.Commands); err != nil {

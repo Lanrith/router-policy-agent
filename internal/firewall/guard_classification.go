@@ -136,6 +136,12 @@ func validatePreparedGuardBatch(ctx context.Context, prepared *preparedGuardBatc
 	if prepared == nil {
 		return errors.New("firewall: missing prepared guarded transaction")
 	}
+	if !prepared.native && prepared.nat46Model != nil {
+		return errors.New("firewall: nat46 guard model requires native preparation")
+	}
+	if prepared.native {
+		return validateNativeGuardBatch(ctx, prepared)
+	}
 	return validateMappedGuardBatch(ctx, prepared.batch.data, prepared.classification, prepared.translationPaths)
 }
 

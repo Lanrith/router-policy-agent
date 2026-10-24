@@ -14,6 +14,7 @@ import (
 // Baseline is router-owned configuration, never supplied by a directory group.
 // The privileged applier loads its own copy independently of the reader.
 type Baseline struct {
+	NetworkModel         *NetworkModel         `json:"network_model,omitempty"`
 	SchemaVersion        int                   `json:"schema_version"`
 	Generation           string                `json:"generation"`
 	Zones                []Zone                `json:"zones"`
@@ -65,7 +66,10 @@ func DecodeBaseline(data []byte) (Baseline, error) {
 	required := []string{"schema_version", "generation", "zones", "protected_networks", "protected_endpoints",
 		"retained_blocks", "nat64", "nat46", "nat46_pools", "lease_seconds", "refresh_seconds",
 		"maximum_devices", "maximum_tuples"}
-	if err := strictjson.Object(data, required, []string{"controller_initiators"}, 2*1024*1024); err != nil {
+	if err := strictjson.Object(data, required, []string{"controller_initiators", "network_model"}, 2*1024*1024); err != nil {
+		return Baseline{}, err
+	}
+	if err := decodeNetworkModel(data); err != nil {
 		return Baseline{}, err
 	}
 	if err := decodeControllerInitiators(data); err != nil {
@@ -92,11 +96,19 @@ func validateBaseline(b Baseline) error {
 	if !isLeaseValid || !isRefreshValid || !isCapacityValid {
 		return errors.New("policy: baseline timing or capacity outside bounds")
 	}
+	if len(b.Zones) == 0 || len(b.Zones) > 64 {
+		return errors.New("policy: network count outside bounds")
+	}
 	roles := map[Role]bool{}
 	vlans := map[uint16]bool{}
 	interfaces := map[string]bool{}
 	for _, zone := range b.Zones {
-		if !validRole(zone.Role) || roles[zone.Role] || zone.VLAN == 0 || zone.VLAN > 4094 || vlans[zone.VLAN] {
+		isRoleValid := validRole(zone.Role)
+		if b.NetworkModel != nil {
+			isRoleValid = validNetworkName(zone.Role)
+		}
+		if !isRoleValid || roles[zone.Role] || zone.VLAN > 4094 ||
+			b.NetworkModel == nil && (zone.VLAN == 0 || vlans[zone.VLAN]) {
 			return errors.New("policy: invalid or duplicate zone")
 		}
 		if len(zone.Networks) == 0 || len(zone.Interfaces) == 0 || len(zone.Interfaces) > 8 {
@@ -113,7 +125,7 @@ func validateBaseline(b Baseline) error {
 			return err
 		}
 	}
-	if len(roles) != 6 {
+	if b.NetworkModel == nil && len(roles) != 6 {
 		return errors.New("policy: all six role boundaries must be declared")
 	}
 	for first, zone := range b.Zones {
@@ -131,6 +143,9 @@ func validateBaseline(b Baseline) error {
 		return err
 	}
 	if err := validateTranslators(b); err != nil {
+		return err
+	}
+	if err := validateNetworkModel(b); err != nil {
 		return err
 	}
 	return validateControllerInitiators(b)
@@ -158,11 +173,18 @@ func validateCatalogs(b Baseline) error {
 				return err
 			}
 			protections[block.ProtectionID] = true
-			if len(block.Roles) > 6 {
+			if len(block.Roles) > len(b.Zones) {
 				return errors.New("policy: retained role catalog outside bounds")
 			}
 			for _, role := range block.Roles {
-				if !validRole(role) {
+				isValid := validRole(role)
+				if b.NetworkModel != nil {
+					isValid = false
+					for _, zone := range b.Zones {
+						isValid = isValid || zone.Role == role
+					}
+				}
+				if !isValid {
 					return errors.New("policy: invalid retained block role")
 				}
 			}

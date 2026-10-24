@@ -291,14 +291,27 @@ func (inventory *setInventory) checkReplacement(ctx context.Context, data []byte
 	var batch struct {
 		Commands []change `json:"nftables"`
 	}
-	if err := strictjson.Decode(data, &batch, maximumBatch); err != nil {
+	if err := json.Unmarshal(data, &batch); err != nil {
+		return err
+	}
+	return inventory.checkClassifiedGrantChanges(ctx, batch.Commands)
+}
+
+// Callers first validate the complete fixed transaction. This check retains
+// the current permanent cohort, enforces its union bound and independently
+// requires every leased MAC to be classified; it creates no new permission.
+func (inventory *setInventory) checkClassifiedGrantChanges(ctx context.Context, commands []change) error {
+	if inventory == nil || ctx == nil {
+		return errors.New("firewall: missing verified replacement dependencies")
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	cohort := make(map[string]bool, len(inventory.cohort))
 	for _, mac := range inventory.cohort {
 		cohort[mac] = true
 	}
-	for _, command := range batch.Commands {
+	for _, command := range commands {
 		if command.Add == nil || command.Add.Element.Name != cohortSet {
 			continue
 		}
@@ -313,7 +326,7 @@ func (inventory *setInventory) checkReplacement(ctx context.Context, data []byte
 	if len(cohort) > maximumCohortSize {
 		return errors.New("firewall: replacement exceeds permanent cohort capacity")
 	}
-	for _, command := range batch.Commands {
+	for _, command := range commands {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
