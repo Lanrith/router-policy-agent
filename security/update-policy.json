@@ -7,7 +7,7 @@
   "large_artifact_retention_days": 1,
   "maximum_changes": 30,
   "maximum_validation_age_hours": 12,
-  "mode": "report-only",
+  "mode": "enforce",
   "node_branches": [
     "24"
   ],

@@ -2,9 +2,11 @@
 
 Security-only proposals use the pinned Lanrith maintenance workflows. They record
 the advisory, exact changed input digests, policy and tool revision. The independent
-reviewer fetches the actual PR bytes and GitHub validation results. Approval remains
-disabled during the report-only pilot. Workflow, policy, native source and module
-migrations require human review.
+reviewer fetches the actual PR bytes and GitHub validation results. Approval requires
+both enforcement mode in the protected policy and the repository approval flag.
+The flag stays disabled until the platform and both component policy changes
+are reviewed, qualified and merged, and the final configuration checks pass.
+Workflow, policy, native source and module migrations require human review.
 
 The compiler is pinned in `.go-version`. Dependency updates remain on the existing
 stable patch line and retain Go checksum verification. Full component qualification,
@@ -26,3 +28,10 @@ Cleanup skips empty inventories. Its own small audit handoffs expire after one d
 The publisher verifies a human reviewer's current write or admin access directly.
 Private organisation membership can appear as contributor status to an
 installation token; that display value does not establish review authority.
+
+The proposer, reviewer, release collector, publisher and cleanup workflows pin
+the same protected Lanrith commit. The remediation record links that commit
+to its immutable release, signed assessment and actual approval history.
+Admission stays in progress while required validation is unfinished, then
+rechecks on completion. Pending, failed, cancelled, skipped or stale
+validation cannot grant automatic approval or permit a merge.
