@@ -29,6 +29,16 @@ kernel:
 		--mount type=bind,src="$(CURDIR)",dst=/workspace,readonly \
 		--workdir /workspace $(KERNEL_TEST_IMAGE) \
 		go test -race -shuffle=on -count=1 -tags integration,kernel ./internal/firewall
+	# Give the deliberately seeded conntrack regression its own namespace.
+	$(CONTAINER) run --rm --network none --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_RAW \
+		--sysctl net.ipv4.ip_forward=1 --sysctl net.ipv6.conf.all.forwarding=1 \
+		--security-opt no-new-privileges \
+		--env ROUTER_POLICY_KERNEL_TEST=isolated \
+		--env ROUTER_POLICY_REQUIRE_HEADER_TEST \
+		--mount type=bind,src="$(CURDIR)",dst=/workspace,readonly \
+		--workdir /workspace $(KERNEL_TEST_IMAGE) \
+		go test -race -count=1 -tags integration,kernel,conntrackreplay \
+		-run '^TestKernelNamedNAT46OrderedWirePolicyAfterTransport$$' ./internal/firewall
 
 ## kernel-service: Qualify non-root IPC, durable state and actual native firewall lifecycle
 kernel-service:

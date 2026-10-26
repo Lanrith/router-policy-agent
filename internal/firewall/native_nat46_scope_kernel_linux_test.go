@@ -179,6 +179,16 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 		t.Helper()
 		serial++
 		value.payload = fmt.Sprintf("n46-policy-%d", serial)
+		t.Logf(
+			"wire packet %d: %s -> %s tcp=%t icmp=%t echo=%#x allowed=%t",
+			serial,
+			value.source,
+			value.destination,
+			value.isTCP,
+			value.isICMP,
+			value.icmpData,
+			allowed,
+		)
 		sendPacket(ctx, t, input, packetFrame(t, value))
 		if allowed {
 			receivePacket(ctx, t, output, packetFrame(t, value), true)
@@ -186,8 +196,16 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 			rejectNATPayload(ctx, t, output, value.payload)
 		}
 	}
+	// Conntrack keys echo identifiers, not their sequence numbers. Use an
+	// identifier distinct from the transport fixture's retained epoch marks.
 	for _, protocol := range []string{"tcp", "udp", "icmp"} {
-		original := packetDatagram{source: client, destination: target, sourceMAC: "02:00:00:00:00:46", destinationMAC: "02:00:00:00:01:46", sourcePort: 53000, destinationPort: 6053, isTCP: protocol == "tcp", tcpFlags: 2, isICMP: protocol == "icmp", icmpType: 128, icmpData: 0xc0460001}
+		original := packetDatagram{
+			source: client, destination: target,
+			sourceMAC: "02:00:00:00:00:46", destinationMAC: "02:00:00:00:01:46",
+			sourcePort: 53000, destinationPort: 6053,
+			isTCP: protocol == "tcp", tcpFlags: 2,
+			isICMP: protocol == "icmp", icmpType: 128, icmpData: 0x4e460001,
+		}
 		transmit(original, translated, device, true)
 		reply := original
 		reply.source, reply.destination = target, client

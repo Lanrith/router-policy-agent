@@ -1,0 +1,104 @@
+{
+  "approval": {
+    "reason": "Native test source and its Makefile command are outside the narrow automated dependency-update lane. The previous policy PR approval does not cover this repair.",
+    "status": "fresh-exact-head-independent-human-GitHub-review-required"
+  },
+  "automatic_approvals_enabled": false,
+  "base_commit": "cb5b31d9859fbf5414f2bf0c12034af98d400632",
+  "correction": [
+    "Use ICMP echo identifier 0x4e46 for the ordered-wire fixture instead of the transport fixture identifier 0xc046; keep the original sequence number.",
+    "Log each synthetic packet identity and expected verdict for future native failures.",
+    "Add a deterministic regression that seeds the former transport tuple and retained mark before running every ordered-wire assertion.",
+    "Run that deliberately contaminating regression with the conntrackreplay build tag in a separate disposable network namespace after the unchanged full shuffled native suite. Keep the existing capabilities and required header checks."
+  ],
+  "created_at": "2026-10-26T22:55:12.740210+00:00",
+  "evidence_archive": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-nat46-conntrack-fixture-20261026T225512Z",
+  "input_changes": {
+    "Makefile": {
+      "after_sha256": "2fc18f5290777978c6b96ac98381a1b4b9434a50c12d56a389752f90adc72c53",
+      "before_sha256": "59f8ad793f6b5a5e32d62b886ea8945dc0714ae8e82759383d7b34f3424af7f0"
+    },
+    "internal/firewall/native_nat46_scope_conntrack_kernel_linux_test.go": {
+      "after_sha256": "a4acab4a408ead08bc64e6aa75b521692d7ed8225c3a005fc4ad37cc5600ee12",
+      "before_sha256": null
+    },
+    "internal/firewall/native_nat46_scope_kernel_linux_test.go": {
+      "after_sha256": "04c37e8d97b9aff7d7df910165293c7d61672c5700cf3d66428d2b2ad8e673b9",
+      "before_sha256": "a026bbd0b601b43bbb12c486810d01431648f499002f470d933ca835d4d91b44"
+    }
+  },
+  "kind": "native-kernel-fixture-conntrack-isolation",
+  "production_qualified": false,
+  "reason": "The shuffled native suite reused the same IPv6 ICMP echo connection identity in the transport and ordered-wire fixtures. Link and nft table cleanup leaves conntrack entries in their shared network namespace. The old connection retained epoch mark 0x1c03 while the ordered fixture requires 0x1c04, so its delivery assertion failed closed.",
+  "repository": "Lanrith/router-policy-agent",
+  "schema": 1,
+  "trigger": {
+    "kernel_job": 121876218153,
+    "original_assertion": "native_nat46_scope_kernel_linux_test.go:191: synthetic routed packet was not delivered",
+    "prior_actual_human_reviews": [
+      {
+        "commit_id": "5a5a4748c336183c7d0cf1930d8772bcb0691e25",
+        "id": 5659722184,
+        "state": "APPROVED",
+        "submitted_at": "2026-10-26T22:03:26Z",
+        "user": {
+          "login": "mikenorgate",
+          "type": "User"
+        }
+      }
+    ],
+    "prior_policy_pr": 6,
+    "run": {
+      "conclusion": "failure",
+      "created_at": "2026-10-26T22:04:05Z",
+      "event": "push",
+      "head_sha": "cb5b31d9859fbf5414f2bf0c12034af98d400632",
+      "html_url": "https://github.com/Lanrith/router-policy-agent/actions/runs/40409517155",
+      "id": 40409517155,
+      "path": ".github/workflows/release.yml",
+      "run_attempt": 1,
+      "status": "completed",
+      "updated_at": "2026-10-26T22:13:15Z"
+    },
+    "shuffle_seed": "1793052305626071155",
+    "test": "TestKernelNamedNAT46OrderedWirePolicy"
+  },
+  "validation": {
+    "corrected_native_replay": {
+      "console_sha256": "be9b2135d9d6534cdeb7ab575724991a5f4af8ca4055e07eb9980085d9a846eb",
+      "full_guard_suite": false,
+      "inputs_sha256": "27fb45cc4375fee46477e97f69b91f30c6884c037d8c168fc19ffda096116a9d",
+      "limitations": [
+        "Focused regression only; the base is a previously preserved local neutral filesystem.",
+        "No host disk, NIC, hardware keys or deployment data are attached. Full hosted race/native qualification remains mandatory."
+      ],
+      "production_qualified": false,
+      "result": "pass",
+      "tests": [
+        "TestKernelNamedNAT46OrderedWirePolicyAfterTransport"
+      ]
+    },
+    "detailed_validation_sha256": "9a2e3e84d042524bf913b127aa662c80c29264c1fbe6fb0012527b8130043a1c",
+    "formatting_vet_and_race_tests": {
+      "commands": [
+        "gofmt -l <two changed native test files>",
+        "go vet -tags integration,kernel,conntrackreplay ./internal/firewall",
+        "go test -race -count=1 ./internal/firewall"
+      ],
+      "log_sha256": "076abfd28aba7ad883cb4a56c0395d1b13b8dc832e04b4dc0f4c0f9474e43004",
+      "result": "pass"
+    },
+    "hosted": "Fresh full PR CI and the subsequent Main release must pass; local replay does not qualify a production build.",
+    "original_native_replay": {
+      "console_sha256": "bc678f054047c9bfa67c7c716bf80740f131f7bd9db889169c8de544505049d6",
+      "error": "=== RUN   TestKernelNamedNAT46OrderedWirePolicyAfterTransport\n=== RUN   TestKernelNamedNAT46OrderedWirePolicyAfterTransport/seed-prior-transport\n=== RUN   TestKernelNamedNAT46OrderedWirePolicyAfterTransport/ordered-wire-after-transport\n    native_nat46_scope_kernel_linux_test.go:191: synthetic routed packet was not delivered\n--- FAIL: TestKernelNamedNAT46OrderedWirePolicyAfterTransport (7.16s)\n    --- PASS: TestKernelNamedNAT46OrderedWirePolicyAfterTransport/seed-prior-transport (1.73s)\n    --- FAIL: TestKernelNamedNAT46OrderedWirePolicyAfterTransport/ordered-wire-after-transport (5.42s)\nFAIL\nTraceback (most recent call last):\n  File \"/init\", line 23, in <module>\n    subprocess.run(['/kernel-tests','-test.v','-test.run=^(TestKernelNamedNAT46OrderedWirePolicyAfterTransport)$'],check=True)\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.13/subprocess.py\", line 577, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['/kernel-tests', '-test.v', '-test.run=^(TestKernelNamedNAT46OrderedWirePolicyAfterTransport)$']' returned non-zero exit status 1.\nROUTER_POLICY_KERNEL_VM_FAIL\n[   28.945391] reboot: Power down\n",
+      "expected_baseline_failure": true,
+      "inputs_sha256": "dac66140ef4774db5ddf6dcead206a7ccd1af6aa053cc3640e5f013f50c52b7f",
+      "result": "fail",
+      "tests": [
+        "TestKernelNamedNAT46OrderedWirePolicyAfterTransport"
+      ]
+    },
+    "result": "pass"
+  }
+}
