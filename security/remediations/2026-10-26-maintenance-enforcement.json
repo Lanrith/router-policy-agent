@@ -1,0 +1,125 @@
+{
+  "activation": {
+    "automatic_approvals_enabled": false,
+    "requirements": [
+      "Verified immutable v0.1.7 platform publication and fresh signed assessment passed before this PR was published.",
+      "Human approval and successful full component CI must cover the final head.",
+      "All three protected policies and trusted source pins must be ready before approval flags are enabled.",
+      "Bind the admission check to the reviewer App, protect administrators and retain read-only default workflow tokens."
+    ]
+  },
+  "approval": {
+    "reason": "This change modifies workflow trust pins and security policy; it is outside the automatic dependency-update lane.",
+    "status": "fresh-exact-head-independent-human-GitHub-review-required"
+  },
+  "base_commit": "d2a664e0be82087a7e35046880d9a611579c5e31",
+  "candidate_production_qualified": false,
+  "created_at": "2026-10-26T18:30:19.225276+00:00",
+  "input_changes": {
+    ".github/workflows/build-release.yml": {
+      "after_sha256": "977e78b95c2d02d02fd6c7103f381ad833f1c7ba3a5745da1bf608357c6022df",
+      "before_sha256": "46163fd5fccaa5b541c7fa032ff4c55636e03f136ff812c0fc5e517033223bdd"
+    },
+    ".github/workflows/cleanup-artifacts.yml": {
+      "after_sha256": "88924654cc63e69d48a3320353eb79c02b94ae5726abb84d42abee3d56e059e3",
+      "before_sha256": "dad9a5badb716082c2cf92e758913a1a6a01b51508ef80263219d04a1076ff9e"
+    },
+    ".github/workflows/security-review.yml": {
+      "after_sha256": "96ebbf406f0d52b35659fd255b013e1bb48bd9d7d017ceef270e0202bab2bc39",
+      "before_sha256": "c65a00ebe013b262e6f9fe2263f0846546cd0ba16d3acc737bf0121409274054"
+    },
+    ".github/workflows/update-inputs.yml": {
+      "after_sha256": "f40c8639eb8d4e077b0bc27cbd8e1e2fdbc196a56f672012c03d13dfbbd75565",
+      "before_sha256": "cedf472412d6c3739c7e4d3525fd82a40e48cd0ddaa42d42835845237a971905"
+    },
+    "docs/security-maintenance.md": {
+      "after_sha256": "1ce2cc281847535af41a79c6523082a26af5cb357377d85285384ff227b1a3fd",
+      "before_sha256": "8499ea100c5bf0037850dcbdc283b0f89fb61583022fb55e8e7e05d02b1b6011"
+    },
+    "security/update-policy.json": {
+      "after_sha256": "36bad468ac43395b5c78375b73a27a3a584594345ead19913239acb4848b4b7d",
+      "before_sha256": "c0a2346d21a92e6f91ee48da6692551786e0a15c337392ff5af4ba11972e1c56"
+    }
+  },
+  "kind": "component-maintenance-enforcement-change",
+  "limits": [
+    "The source pin is the actual protected-main merge covered by the independently verified immutable v0.1.7 pilot.",
+    "Local workflow and policy checks do not replace full hosted component CI and fresh exact-head human approval of this candidate.",
+    "Automatic approval remains disabled until all three protected policies and workflow pins are deployed and the final configuration checks pass."
+  ],
+  "maintenance_references": [
+    {
+      "after": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "before": "c87da60e873302a95ef2ff4209055ac85b08910c",
+      "entry": "publisher",
+      "path": ".github/workflows/build-release.yml"
+    },
+    {
+      "after": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "before": "006302c0336a814a754693b4c93b4953b4315dc7",
+      "entry": "release-collector-checkout",
+      "path": ".github/workflows/build-release.yml"
+    },
+    {
+      "after": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "before": "006302c0336a814a754693b4c93b4953b4315dc7",
+      "entry": "reusable-workflow",
+      "path": ".github/workflows/update-inputs.yml"
+    },
+    {
+      "after": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "before": "006302c0336a814a754693b4c93b4953b4315dc7",
+      "entry": "reusable-workflow",
+      "path": ".github/workflows/security-review.yml"
+    },
+    {
+      "after": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "before": "006302c0336a814a754693b4c93b4953b4315dc7",
+      "entry": "reusable-workflow",
+      "path": ".github/workflows/cleanup-artifacts.yml"
+    }
+  ],
+  "platform": {
+    "approved_pr_head": "222329103a727ca2c5b0bd7e92766cf074e70e3b",
+    "human_review_id": 5654519966,
+    "immutable_release": "v0.1.7",
+    "main_release_run": 40371292250,
+    "pilot_gate": "pass",
+    "pilot_proof_sha256": "5df16990fee4df8e4d0f4e6003ac68409982203ce4385bd0e9fdb540b3d78f95",
+    "pr_qualification_result": "success",
+    "pr_qualification_run": 40348679945,
+    "protected_main_commit": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+    "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-40371292250-1",
+    "release_id": 424738151,
+    "repository": "Lanrith/lanrith",
+    "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261026T203755Z-10cc39e67191",
+    "source_pr": 17
+  },
+  "policy_change": {
+    "mode_after": "enforce",
+    "mode_before": "report-only",
+    "other_fields_changed": false,
+    "paid_ai": false,
+    "proposer_app_id": 5355607,
+    "reviewer_app_id": 5444158
+  },
+  "reason": "Adopt the human-approved platform reviewer correction and staged security enforcement, with the same trusted source for every maintenance entry point.",
+  "repository": "Lanrith/router-policy-agent",
+  "schema": 1,
+  "validation": {
+    "checks": [
+      "Pinned actionlint, exit 0",
+      "Git whitespace check, exit 0",
+      "Exact seven-file scope and no Go/runtime/dependency source changes",
+      "Only mode changes in the strict security policy",
+      "Required component workflow and mandatory job names remain intact",
+      "Only source pins change in workflow semantics; permissions and execution steps remain intact",
+      "All four reusable-workflow input and permission contracts match the actual protected platform source",
+      "Release collector is pinned to the same source with checkout credentials disabled",
+      "Changed files are bounded regular public metadata without private keys, tokens or local home paths"
+    ],
+    "hosted_component_ci": "required-on-the-final-published-head-before-merge",
+    "runtime_or_dependency_source_changes": false,
+    "state": "local-workflow-and-policy-validation-passed"
+  }
+}
