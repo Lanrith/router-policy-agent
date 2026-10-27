@@ -1,0 +1,141 @@
+{
+  "approval": {
+    "reason": "Trusted workflow pins change; this is outside the automatic dependency-update lane.",
+    "status": "fresh-exact-head-independent-human-GitHub-review-required"
+  },
+  "automatic_approvals_enabled": false,
+  "base_commit": "e51eddc2517ef539c6774940f9149701ee1f31f1",
+  "component_predecessor": {
+    "approved_policy_and_repair_chain": [
+      {
+        "audit_url": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-maintenance-enforcement-20261026T204833Z",
+        "base": "d2a664e0be82087a7e35046880d9a611579c5e31",
+        "head": "5a5a4748c336183c7d0cf1930d8772bcb0691e25",
+        "human_review_id": 5659722184,
+        "merged_at": "2026-10-26T22:04:02Z",
+        "pull_request": 6,
+        "repository": "Lanrith/router-policy-agent",
+        "source_commit": "cb5b31d9859fbf5414f2bf0c12034af98d400632",
+        "tree": "73740ebfe8531416dd151f30c8503b73d5132aec",
+        "validation": [
+          {
+            "association_evidence": "Exact reviewed PR head; immutable squash parent/tree; signed released history is checked before a passing result.",
+            "base_sha": "d2a664e0be82087a7e35046880d9a611579c5e31",
+            "completed_at": "2026-10-26T21:02:04Z",
+            "conclusion": "success",
+            "freshness_reference": "actual-protected-merge-time",
+            "head_sha": "5a5a4748c336183c7d0cf1930d8772bcb0691e25",
+            "jobs": [
+              {
+                "conclusion": "success",
+                "id": 121845995653,
+                "name": "Required checks"
+              }
+            ],
+            "post_merge_pr_associations": [],
+            "run_attempt": 1,
+            "run_id": 40399261769,
+            "url": "https://github.com/Lanrith/router-policy-agent/actions/runs/40399261769",
+            "workflow": ".github/workflows/check.yml"
+          }
+        ]
+      },
+      {
+        "audit_url": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-nat46-conntrack-fixture-20261026T225512Z",
+        "base": "cb5b31d9859fbf5414f2bf0c12034af98d400632",
+        "head": "9fc1b064009584e3f93fcae30414a87adcc87e7b",
+        "human_review_id": 5664131839,
+        "merged_at": "2026-10-27T08:34:09Z",
+        "pull_request": 7,
+        "repository": "Lanrith/router-policy-agent",
+        "source_commit": "e51eddc2517ef539c6774940f9149701ee1f31f1",
+        "tree": "5640cb1ca9c8cf82e55906035fc41fc5674367e5"
+      }
+    ],
+    "human_review_id": 5664131839,
+    "publication_audit": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-publication-40474423165-1",
+    "source_commit": "e51eddc2517ef539c6774940f9149701ee1f31f1",
+    "tag": "v0.1.5"
+  },
+  "created_at": "2026-10-27T16:17:43.223752+00:00",
+  "evidence_archive": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-maintenance-tracking-pins-20261027T161743Z",
+  "input_changes": {
+    ".github/workflows/build-release.yml": {
+      "after_sha256": "3f622e3cdea4802ab5761aeda9bbf37b8205df6344ceff5dbb45790908cffa48",
+      "before_sha256": "977e78b95c2d02d02fd6c7103f381ad833f1c7ba3a5745da1bf608357c6022df"
+    },
+    ".github/workflows/cleanup-artifacts.yml": {
+      "after_sha256": "b0a7eebfdc3e5de0b149f2c962a572207000af7258f22a9d4725cd90f2ff5463",
+      "before_sha256": "88924654cc63e69d48a3320353eb79c02b94ae5726abb84d42abee3d56e059e3"
+    },
+    ".github/workflows/security-review.yml": {
+      "after_sha256": "4a9b855e482911a90f04def58013d20234638d45ba114485cef85bab913d3ee4",
+      "before_sha256": "96ebbf406f0d52b35659fd255b013e1bb48bd9d7d017ceef270e0202bab2bc39"
+    },
+    ".github/workflows/update-inputs.yml": {
+      "after_sha256": "3e0f694d6651273c41186ebef0a036e48e8bcf588cc3ddec4dbb4b22120370ac",
+      "before_sha256": "f40c8639eb8d4e077b0bc27cbd8e1e2fdbc196a56f672012c03d13dfbbd75565"
+    }
+  },
+  "kind": "verified-maintenance-tracking-source-pin-update",
+  "maintenance_references": [
+    {
+      "after": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "before": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "entry": "release-collector",
+      "path": ".github/workflows/build-release.yml"
+    },
+    {
+      "after": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "before": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "entry": "reusable-workflow",
+      "path": ".github/workflows/build-release.yml",
+      "workflow": ".github/workflows/publish-release.yml"
+    },
+    {
+      "after": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "before": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "entry": "reusable-workflow",
+      "path": ".github/workflows/update-inputs.yml",
+      "workflow": ".github/workflows/security-proposal.yml"
+    },
+    {
+      "after": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "before": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "entry": "reusable-workflow",
+      "path": ".github/workflows/security-review.yml",
+      "workflow": ".github/workflows/security-review.yml"
+    },
+    {
+      "after": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "before": "eaafa126f2aaea4deb1db36dcebc1f511f41820c",
+      "entry": "reusable-workflow",
+      "path": ".github/workflows/cleanup-artifacts.yml",
+      "workflow": ".github/workflows/cleanup-artifacts.yml"
+    }
+  ],
+  "platform": {
+    "actual_human_review_id": 5664947213,
+    "approved_head": "7b96b40c89a4003e7406f42387a21af6e5b042a8",
+    "pilot_result": "pass",
+    "pilot_sha256": "5463119a95cc53e4fcb846d0b03af40b04f22541e68c13bae05cc5c05ca29e78",
+    "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-40494583701-1",
+    "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261027T133409Z-28a734bdc259",
+    "source_commit": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+    "source_pr": 19,
+    "tag": "v0.1.8"
+  },
+  "production_qualified": false,
+  "reason": "Adopt the human-reviewed and immutably released PR19 proposal-tracking repair. The proposer must read its preserved artifact after PR checkout cleanup; proposer and reviewer producer identities must pin the same trusted implementation.",
+  "repository": "Lanrith/router-policy-agent",
+  "schema": 1,
+  "validation": {
+    "checks": [
+      "Only four workflow source pins change, with five exact trust references.",
+      "Reusable workflow input and permission contracts match the actual verified protected Main source.",
+      "Pinned actionlint passes. Policy, dependencies, runtime/native source and required CI definitions remain byte-identical."
+    ],
+    "hosted": "Fresh full component CI must cover the final published head; local configuration checks do not qualify a build.",
+    "result": "local-configuration-pass"
+  }
+}
