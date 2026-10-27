@@ -16,4 +16,4 @@ jobs:
       actions: write
       id-token: write
       attestations: write
-    uses: Lanrith/lanrith/.github/workflows/cleanup-artifacts.yml@eaafa126f2aaea4deb1db36dcebc1f511f41820c
+    uses: Lanrith/lanrith/.github/workflows/cleanup-artifacts.yml@5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec
