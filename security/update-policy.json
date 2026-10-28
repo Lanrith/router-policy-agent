@@ -1,4 +1,5 @@
 {
+  "automatic_minor_security_updates": true,
   "component_repositories": [],
   "go_branches": [
     "1.26",

@@ -1,0 +1,53 @@
+{
+  "approval": "Fresh independent human source approval required after full hosted CI; no paid AI.",
+  "base_commit": "794f06a338ba8c30ac1a4d803ee4e4b4571917dc",
+  "created_at": "2026-10-28T22:10:57.571224+00:00",
+  "kind": "verified-minor-security-and-ci-gated-review-component-rollout",
+  "maintenance_references": [
+    {
+      "after": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "before": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "path": ".github/workflows/build-release.yml"
+    },
+    {
+      "after": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "before": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "path": ".github/workflows/update-inputs.yml"
+    },
+    {
+      "after": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "before": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "path": ".github/workflows/security-review.yml"
+    },
+    {
+      "after": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "before": "5a4bbdb033f16a6d46cbf62c95870164c3bbd8ec",
+      "path": ".github/workflows/cleanup-artifacts.yml"
+    }
+  ],
+  "merge_rule": "Owner handoff commits must contain no skip-CI markers. Supply an explicit sanitized squash title/body; cancel only superseded intermediate runs.",
+  "minor_policy_opt_in": true,
+  "paid_ai": false,
+  "platform": {
+    "actual_human_review_id": 5686433067,
+    "proof_sha256": "90a1ada6fcf7091413aef119b2b202e73868b0248cf8727b171c59402c7adab6",
+    "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-40730891248-1",
+    "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261028T200407Z-51e892ec1aa1",
+    "source_commit": "4f2184f6ec923186365a32c9bf0275499df3a858",
+    "tag": "v0.1.9"
+  },
+  "predecessor": {
+    "source_commit": "794f06a338ba8c30ac1a4d803ee4e4b4571917dc",
+    "tag": "v0.1.6"
+  },
+  "production_qualified": false,
+  "reason": "Adopt the independently human-reviewed, fully qualified and immutably published Root23 security maintenance implementation. Verified minimum same-major security fixes can be automated; human source review requests wait until every required current-head build passes.",
+  "repository": "Lanrith/router-policy-agent",
+  "review_notification": {
+    "receiver": "mikenorgate",
+    "requires": "All fresh exact required workflows/jobs pass before a native review request.",
+    "trust_boundary": "Unprivileged no-checkout PR signal; trusted Root reusable workflow with Actions read and PR/Issues write, no App keys or release/signing authority."
+  },
+  "schema": 1,
+  "validation": "Pinned actionlint and exact reusable workflow input/permission contracts pass. Full final-head hosted qualification remains required."
+}
