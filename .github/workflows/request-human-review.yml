@@ -1,0 +1,26 @@
+name: Request human review
+on:
+  workflow_run:
+    workflows: [Review routing, CI, Check]
+    types: [in_progress, completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        required: true
+        type: number
+permissions:
+  contents: read
+concurrency:
+  group: maintenance-human-review-${{ github.event.workflow_run.head_sha || inputs.pr || github.run_id }}
+  cancel-in-progress: false
+jobs:
+  notify:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      issues: write
+    uses: Lanrith/lanrith/.github/workflows/request-human-review.yml@4f2184f6ec923186365a32c9bf0275499df3a858
+    with:
+      pr: ${{ inputs.pr || 0 }}
