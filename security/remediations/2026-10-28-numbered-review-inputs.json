@@ -1,0 +1,45 @@
+{
+  "approval": "Fresh independent human source approval after full final-head hosted CI. No App approval or protection bypass. Live manual dispatch must be rechecked after deployment.",
+  "base_commit": "6740ded89f79c80aa56b81751a958728a275cac0",
+  "created_at": "2026-10-28T23:19:27.749959+00:00",
+  "input_changes": [
+    {
+      "after": "fromJSON(inputs.pr || '0')",
+      "before": "inputs.pr || 0",
+      "path": ".github/workflows/security-review.yml"
+    },
+    {
+      "after": "fromJSON(inputs.pr || '0')",
+      "before": "inputs.pr || 0",
+      "path": ".github/workflows/request-human-review.yml"
+    }
+  ],
+  "kind": "explicit-numbered-manual-review-input-repair",
+  "local_validation": {
+    "actionlint": "pinned v1.7.12 pass",
+    "formatting": "pass",
+    "full_go_vet": "pass",
+    "pinned_golangci_lint": "v2.14.0, zero issues on all changed Go code",
+    "race_shuffled_test": "pass",
+    "regression_before": "expected failure for both caller interfaces in both repositories",
+    "test_log_sha256": "10018aba83654a3a6bcec657ed32501a828e2ff01c6383f76941844d0ea96964"
+  },
+  "observed_live_run": {
+    "id": 40781911758,
+    "numeric_json_dispatch": "REST rejected a JSON number; API dispatch input is a string.",
+    "repository": "Lanrith/discovery-bridge",
+    "result": "failure before any jobs/logs for manual pr=11"
+  },
+  "paid_ai": false,
+  "predecessor": {
+    "actual_human_review_id": 5690620338,
+    "publication_audit": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-publication-40781498611-1",
+    "tag": "v0.1.7"
+  },
+  "primary_source": "https://github.com/actions/runner/issues/2848",
+  "reason": "GitHub workflow_dispatch number values can arrive as strings. Forwarding that value unchanged to a reusable number input fails before jobs start. Decode the PR value explicitly in notification and security-review callers; preserve the automatic-event numeric-zero fallback.",
+  "regression": "A standard Go CI contract test requires explicit numeric conversion at both reusable interfaces. It fails for all four old forwards and passes after the repair. Its reads are confined to the repository with os.Root; no new dependency or daemon/runtime source is added.",
+  "repository": "Lanrith/router-policy-agent",
+  "schema": 1,
+  "shared_tools_source": "4f2184f6ec923186365a32c9bf0275499df3a858"
+}

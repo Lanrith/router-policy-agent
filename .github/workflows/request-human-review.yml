@@ -23,4 +23,4 @@ jobs:
       issues: write
     uses: Lanrith/lanrith/.github/workflows/request-human-review.yml@4f2184f6ec923186365a32c9bf0275499df3a858
     with:
-      pr: ${{ inputs.pr || 0 }}
+      pr: ${{ fromJSON(inputs.pr || '0') }}
