@@ -1,0 +1,72 @@
+{
+  "approval": "Fresh actual independent human review after full CI; this changes workflow trust and security-control code.",
+  "base_commit": "16f113d68fda4cecc1d0208d210038dfab4ab339",
+  "ci_contract": "Normal Go CI checks all five reusable callers and the release collector against one reviewed source manifest. Negative cases reject each partial rollout. Signature and release provenance are independently verified before proposal; this local contract checks coherence.",
+  "created_at": "2026-10-29T17:05:56.033205+00:00",
+  "deployment_status": "Prepared source only; no component merge, release or healthy live resolver is claimed.",
+  "hosted_validation": "Every final-head required hosted build and mandatory job must pass before requesting human review.",
+  "kind": "reviewed-published-security-control-component-deployment",
+  "known_separate_main_failure": {
+    "reason": "A later Root input-update release failed a native power-cut recovery test. The pinned v0.1.12 control release passed every production gate; its code is unchanged in that later input-only merge. The separate native test repair remains tracked and is not claimed resolved here.",
+    "repair_pull_request": "https://github.com/Lanrith/lanrith/pull/34",
+    "run": 40902187284
+  },
+  "local_validation": {
+    "before_regression": "All five old reusable callers fail the manifest consistency contract.",
+    "full_go_vet": "pass",
+    "go_validation_log_sha256": "f0b5bff4ee54cf6e58c18ec9e78aa8983f4795bc94326092e8a9c4602c4882dd",
+    "negative_cases": "Each of five reusable source pins and the release collector independently reject a partial update.",
+    "pinned_actionlint": "pass",
+    "pinned_golangci_lint": "v2.14.0;zero issues",
+    "race_shuffled_maintenance_contracts": "pass",
+    "whitespace": "pass"
+  },
+  "paid_ai": false,
+  "platform": {
+    "actual_human_review_id": 5697090132,
+    "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-40873227685-1",
+    "repository": "Lanrith/lanrith",
+    "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261029T151506Z-7c8b8750b8bd",
+    "schema": 1,
+    "source_commit": "90b88b65950375f75d331d67dd21da4f2a108018",
+    "verification_record_sha256": "78d7a6826208e78e4c72928b76f5a062202544e7b0cd47ef7e5bf545d11df574",
+    "version": "v0.1.12"
+  },
+  "predecessor_tag": "v0.1.8",
+  "protection_bypass": false,
+  "reason": "Deploy the independently reviewed and immutably published image-stability proposer/reviewer repair. The old shared proposer refreshes a mutable image tag without a compiler security reason and can block a no-op router resolution.",
+  "references": [
+    {
+      "after": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "before": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "count": 2,
+      "path": ".github/workflows/build-release.yml"
+    },
+    {
+      "after": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "before": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "count": 1,
+      "path": ".github/workflows/update-inputs.yml"
+    },
+    {
+      "after": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "before": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "count": 1,
+      "path": ".github/workflows/security-review.yml"
+    },
+    {
+      "after": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "before": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "count": 1,
+      "path": ".github/workflows/cleanup-artifacts.yml"
+    },
+    {
+      "after": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "before": "4f2184f6ec923186365a32c9bf0275499df3a858",
+      "count": 1,
+      "path": ".github/workflows/request-human-review.yml"
+    }
+  ],
+  "repository": "Lanrith/router-policy-agent",
+  "schema": 1
+}
