@@ -11,16 +11,41 @@ import (
 	"github.com/lanrith/router-policy-agent/internal/state"
 )
 
+// ErrBindingsPending means an explicit incomplete producer publication left
+// ownership and application permits successfully sealed. Cleanup failures are
+// never reported with this sentinel and must stop the supervisor.
+var ErrBindingsPending = errors.New("agent: binding collection pending with ownership sealed")
+
 // RefreshBindings is helper-local supervision, not reader IPC. It rereads the
 // authenticated source and persists deny-only address history before refreshing
 // ownership. No directory observation or authorization is created or renewed.
 func (engine *Engine) RefreshBindings(ctx context.Context) (result error) {
+	return engine.refreshBindings(ctx, false)
+}
+
+// InitializeBindings waits up to 90 seconds for the producer's first qualified
+// post-start observation, then installs ownership through the normal checked
+// path. It cannot restore directory grants or change any evidence timestamp.
+// The supervisor calls it before accepting requests or declaring readiness.
+func (engine *Engine) InitializeBindings(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("agent: missing binding startup context")
+	}
+	bounded, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	return engine.refreshBindings(bounded, true)
+}
+
+func (engine *Engine) refreshBindings(ctx context.Context, startup bool) (result error) {
 	if err := engine.acquire(ctx); err != nil {
 		return err
 	}
 	defer engine.release()
 	if !engine.named || !engine.started {
 		return errors.New("agent: ownership supervision requires a started named model")
+	}
+	if startup && engine.options.Mode != Enforce {
+		return nil
 	}
 	history := state.EmptyClassification()
 	defer func() {
@@ -30,7 +55,12 @@ func (engine *Engine) RefreshBindings(ctx context.Context) (result error) {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
 		engine.ownershipFingerprint = ""
-		result = errors.Join(result, engine.options.Firewall.ClearOwnership(cleanup), engine.seal(cleanup, history))
+		cleanupErr := errors.Join(engine.options.Firewall.ClearOwnership(cleanup), engine.seal(cleanup, history))
+		if cleanupErr == nil && ctx.Err() == nil && errors.Is(result, binding.ErrIncomplete) {
+			result = ErrBindingsPending
+			return
+		}
+		result = errors.Join(result, cleanupErr)
 	}()
 	if err := engine.refreshConfiguration(ctx); err != nil {
 		return err
@@ -47,7 +77,13 @@ func (engine *Engine) RefreshBindings(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	bindings, err := engine.options.Bindings(ctx)
+	if startup {
+		engine.ownershipFingerprint = ""
+		if err := errors.Join(engine.options.Firewall.ClearOwnership(ctx), engine.seal(ctx, history)); err != nil {
+			return err
+		}
+	}
+	bindings, err := engine.collectBindings(ctx, startup)
 	if err != nil {
 		return fmt.Errorf("agent: collect qualified ownership: %w", err)
 	}
@@ -77,6 +113,46 @@ func (engine *Engine) RefreshBindings(ctx context.Context) (result error) {
 		return err
 	}
 	return engine.refreshOwnership(ctx, bindings, history)
+}
+
+// The caller holds the engine gate. During startup no request servers run and
+// classification remains closed. Only explicit incomplete publications and
+// otherwise-valid pre-start evidence may wait; unsafe/malformed/future inputs
+// still fail immediately. Every attempt rereads the independently owned source.
+func (engine *Engine) collectBindings(ctx context.Context, startup bool) (binding.Snapshot, error) {
+	if !startup {
+		return engine.options.Bindings(ctx)
+	}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return binding.Snapshot{}, err
+		}
+		snapshot, err := engine.options.Bindings(ctx)
+		if err == nil {
+			now, clockErr := engine.now()
+			if clockErr != nil {
+				return binding.Snapshot{}, clockErr
+			}
+			err = binding.Validate(snapshot, now.utc, engine.lease, engine.maximumDevices)
+			if err == nil {
+				err = engine.checkStartupBindings(ctx, snapshot)
+			}
+			if err == nil {
+				return snapshot, nil
+			}
+		}
+		pending := errors.Is(err, binding.ErrIncomplete) || errors.Is(err, errPreStartupBindings)
+		if !pending {
+			return binding.Snapshot{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return binding.Snapshot{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // The caller holds the engine gate. Refreshing physical evidence cannot make

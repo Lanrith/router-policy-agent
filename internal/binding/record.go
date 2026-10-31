@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// ErrIncomplete is a trusted producer's explicit negative publication while it
+// collects evidence. It never authorizes an address or refreshes a deadline.
+var ErrIncomplete = errors.New("binding: evidence collection is incomplete")
+
 // Snapshot must be produced by a router-trusted collector, not the directory
 // reader. The applier checks file/socket ownership separately from this schema.
 type Snapshot struct {
@@ -51,9 +55,12 @@ func Fresh(observed, now time.Time, lease time.Duration) bool {
 // Validate checks the bounded evidence envelope. Role/subnet ownership and
 // protected-floor checks belong to the independently configured compiler.
 func Validate(snapshot Snapshot, now time.Time, lease time.Duration, maximum int) error {
-	if snapshot.SchemaVersion != 1 || !snapshot.Complete || len(snapshot.Records) > maximum ||
+	if snapshot.SchemaVersion != 1 || len(snapshot.Records) > maximum ||
 		!Fresh(snapshot.ObservedAt, now, lease) || snapshot.Generation == "" {
 		return errors.New("binding: incomplete, stale or oversized evidence")
+	}
+	if !snapshot.Complete {
+		return ErrIncomplete
 	}
 	owners := map[netip.Addr]string{}
 	identities := map[string]bool{}
