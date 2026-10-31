@@ -93,7 +93,7 @@ func runConfiguredWithClock(
 	}
 	defer func() { stopObserver(); observerWorkers.Wait() }()
 	return resources.service.serveListeners(ctx, serviceListeners{
-		requests: options.requests, status: options.status, operator: resources.operator,
+		requests: options.requests, status: options.status, operator: resources.operator, ready: notifyReady,
 	})
 }
 

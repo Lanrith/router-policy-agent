@@ -25,6 +25,8 @@ const (
 	Enforce Mode = "enforce"
 )
 
+var errPreStartupBindings = errors.New("agent: binding evidence predates startup")
+
 // Persistence exposes normal state operations only. Initialization and reset
 // are deliberately absent. Both functions must honor context cancellation.
 type Persistence struct {
@@ -348,18 +350,18 @@ func (engine *Engine) Process(
 
 func (engine *Engine) checkStartupBindings(ctx context.Context, snapshot binding.Snapshot) error {
 	if snapshot.ObservedAt.Before(engine.startupTime) {
-		return errors.New("agent: binding snapshot predates helper startup")
+		return fmt.Errorf("agent: binding snapshot predates helper startup: %w", errPreStartupBindings)
 	}
 	for _, record := range snapshot.Records {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if record.AssociatedAt.Before(engine.startupTime) {
-			return errors.New("agent: association evidence predates helper startup")
+			return fmt.Errorf("agent: association evidence predates helper startup: %w", errPreStartupBindings)
 		}
 		for _, address := range record.Addresses {
 			if address.ObservedAt.Before(engine.startupTime) {
-				return errors.New("agent: address evidence predates helper startup")
+				return fmt.Errorf("agent: address evidence predates helper startup: %w", errPreStartupBindings)
 			}
 		}
 	}
