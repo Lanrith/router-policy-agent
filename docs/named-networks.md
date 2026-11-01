@@ -153,7 +153,8 @@ translator proof, and replaces or clears them with the other allocation state.
 A different source's alias cannot be substituted by changing a serialized row.
 
 Token and allocation replacement or revocation also clear every TCP, UDP and
-ICMP authorization and origin proof map in the same kernel transaction. Opaque
+ICMP authorization, origin-marker and source-identity proof map in the same
+kernel transaction. Opaque
 token IDs can be reassigned within the next registry; an old export must never acquire that
 registry's authority epoch. Packets in flight across publication can therefore
 be dropped. A permitted original must export a fresh tuple, and an old connection
@@ -166,6 +167,18 @@ it with the original connection. A changed marker, missing proof, conflicting
 label contents or confirmed connection without an origin is rejected. These
 checks preserve connection provenance independently of destination permission;
 the current ordered policy, ownership and grant checks still apply.
+
+Before exporting a raw IPv6 original, the helper captures or compares its
+complete source facts. A confirmed connection cannot acquire another source
+context, UID or authority kind. The IPv4 connection separately retains the
+original context, 13-bit source UID and configuration-versus-owned class in
+private labels, preserving unrelated label 100. A reply exports these 24 bits
+in a third timed tuple proof. IPv6 return import requires that proof to match
+the original connection's saved source facts as well as its marker. Equal
+numeric configuration and ownership epochs cannot substitute for source class.
+All twelve timed tuple maps are withdrawn together on publication changes.
+The required kernel suite tests each identity bit, confirmed and foreign-label
+rejection, and substituted return contexts, source IDs and source classes.
 
 Export carries its temporary token in packet priority and never writes the
 connection marker. It preserves the packet's QoS byte and saved priority.

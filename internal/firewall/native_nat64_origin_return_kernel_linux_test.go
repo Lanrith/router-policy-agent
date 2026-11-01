@@ -126,7 +126,7 @@ add rule inet %s %s_observe oifname %q %s meta mark & 0x00ff1c00 == 0x00551c00 m
 	}
 	client, translated, target := packetSocket(t, "peer0"), packetSocket(t, "n64peer"), packetSocket(t, "device0")
 	serial := uint16(60020)
-	for _, mode := range []string{"joined", "missing-origin", "wrong-origin", "missing-authorization", "joined-again"} {
+	for _, mode := range []string{"joined", "missing-origin", "wrong-origin", "missing-identity", "wrong-context", "wrong-source-identity", "wrong-source-kind", "missing-authorization", "joined-again"} {
 		t.Run(mode, func(t *testing.T) {
 			serial++
 			original := packetDatagram{source: entries[0].Source, destination: netip.MustParseAddr("fdca:1a2b:e064::af0:30a"),
@@ -146,7 +146,7 @@ add rule inet %s %s_observe oifname %q %s meta mark & 0x00ff1c00 == 0x00551c00 m
 			reply.source, reply.destination = wire.destination, wire.source
 			reply.sourcePort, reply.destinationPort = wire.destinationPort, wire.sourcePort
 			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:00:13", "02:00:00:00:01:13"
-			packetNft(ctx, t, "flush map inet "+ownedTable+" "+transport.name+"_udp_reply_origin_proof")
+			packetNft(ctx, t, "flush map inet "+ownedTable+" "+transport.name+"_udp_reply_origin_proof; flush map inet "+ownedTable+" "+transport.name+"_udp_reply_identity_proof")
 			exportedAt := time.Now()
 			sendPacket(ctx, t, target, packetFrame(t, reply))
 			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:01:64", "02:00:00:00:00:64"
@@ -157,45 +157,19 @@ add rule inet %s %s_observe oifname %q %s meta mark & 0x00ff1c00 == 0x00551c00 m
 			case "wrong-origin":
 				// Both rule markers belong to this current configuration. A
 				// reply must still name the exact original connection marker.
-				name := transport.name + "_udp_reply_origin_proof"
-				var listing struct {
-					Objects []struct {
-						Map *struct {
-							Elements []json.RawMessage `json:"elem"`
-						} `json:"map"`
-					} `json:"nftables"`
+				replaceNAT64FixtureProof(ctx, t, transport.name+"_udp_reply_origin_proof", epochClassID(23<<policy.OwnershipRuleBits), epochClassID(23<<policy.OwnershipRuleBits|1))
+			case "missing-identity":
+				packetNft(ctx, t, "flush map inet "+ownedTable+" "+transport.name+"_udp_reply_identity_proof")
+			case "wrong-context", "wrong-source-identity", "wrong-source-kind":
+				identity := uint32(1 << 23) // Configuration provenance, context/UID zero.
+				replacement := identity | 1
+				if mode == "wrong-source-identity" {
+					replacement = identity | 1<<10
 				}
-				if err := json.Unmarshal(kernelFixtureCommand(ctx, t, "list", "map", "inet", ownedTable, name), &listing); err != nil || len(listing.Objects) != 2 || listing.Objects[1].Map == nil || len(listing.Objects[1].Map.Elements) != 1 {
-					t.Fatal("return proof fixture lost its single original tuple", err)
+				if mode == "wrong-source-kind" {
+					replacement = 0
 				}
-				var pair []json.RawMessage
-				if err := json.Unmarshal(listing.Objects[1].Map.Elements[0], &pair); err != nil || len(pair) != 2 {
-					t.Fatal("return proof fixture lost its original key/value pair", err)
-				}
-				var originalMarker string
-				if json.Unmarshal(pair[1], &originalMarker) != nil || originalMarker != epochClassID(23<<policy.OwnershipRuleBits) {
-					t.Fatal("return proof did not retain the original rule marker", originalMarker)
-				}
-				var timed struct {
-					Element struct {
-						Value json.RawMessage `json:"val"`
-					} `json:"elem"`
-				}
-				key := pair[0]
-				if json.Unmarshal(key, &timed) == nil && len(timed.Element.Value) != 0 {
-					key = timed.Element.Value
-				}
-				data, err := json.Marshal(map[string]any{"nftables": []any{
-					map[string]any{"flush": map[string]any{"map": ownedRef(name)}},
-					map[string]any{"add": map[string]any{"element": map[string]any{
-						"family": "inet", "table": ownedTable, "name": name,
-						"elem": []any{[]any{key, epochClassID(23<<policy.OwnershipRuleBits | 1)}},
-					}}},
-				}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				executeGuardFixture(ctx, t, data)
+				replaceNAT64FixtureProof(ctx, t, transport.name+"_udp_reply_identity_proof", epochClassID(identity), epochClassID(replacement))
 			case "missing-authorization":
 				packetNft(ctx, t, "flush map inet "+ownedTable+" "+transport.name+"_udp_reply_proof")
 			}
@@ -214,9 +188,51 @@ add rule inet %s %s_observe oifname %q %s meta mark & 0x00ff1c00 == 0x00551c00 m
 			continue
 		}
 		for _, suffix := range []string{"_connection", "_metadata"} {
-			if count := guardFixtureCounter(ctx, t, ownedTable, leg.name+suffix); count != 5 {
+			if count := guardFixtureCounter(ctx, t, ownedTable, leg.name+suffix); count != 9 {
 				t.Fatalf("NAT64 export changed connection or packet metadata: %s=%d", leg.name+suffix, count)
 			}
 		}
 	}
+}
+
+func replaceNAT64FixtureProof(ctx context.Context, t *testing.T, name, expected, replacement string) {
+	t.Helper()
+	var listing struct {
+		Objects []struct {
+			Map *struct {
+				Elements []json.RawMessage `json:"elem"`
+			} `json:"map"`
+		} `json:"nftables"`
+	}
+	if err := json.Unmarshal(kernelFixtureCommand(ctx, t, "list", "map", "inet", ownedTable, name), &listing); err != nil || len(listing.Objects) != 2 || listing.Objects[1].Map == nil || len(listing.Objects[1].Map.Elements) != 1 {
+		t.Fatal("return proof fixture lost its single original tuple", err)
+	}
+	var pair []json.RawMessage
+	if err := json.Unmarshal(listing.Objects[1].Map.Elements[0], &pair); err != nil || len(pair) != 2 {
+		t.Fatal("return proof fixture lost its original key/value pair", err)
+	}
+	var originalMarker string
+	if json.Unmarshal(pair[1], &originalMarker) != nil || originalMarker != expected {
+		t.Fatal("return proof did not retain the original rule marker", originalMarker)
+	}
+	var timed struct {
+		Element struct {
+			Value json.RawMessage `json:"val"`
+		} `json:"elem"`
+	}
+	key := pair[0]
+	if json.Unmarshal(key, &timed) == nil && len(timed.Element.Value) != 0 {
+		key = timed.Element.Value
+	}
+	data, err := json.Marshal(map[string]any{"nftables": []any{
+		map[string]any{"flush": map[string]any{"map": ownedRef(name)}},
+		map[string]any{"add": map[string]any{"element": map[string]any{
+			"family": "inet", "table": ownedTable, "name": name,
+			"elem": []any{[]any{key, replacement}},
+		}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeGuardFixture(ctx, t, data)
 }

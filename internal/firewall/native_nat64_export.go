@@ -9,11 +9,20 @@ func (transport *nativeNAT64Transport) exportChains(leg nativeNAT64Leg, checked,
 	tokenStage, record := checked+"_token", checked+"_record"
 	if leg.reply {
 		restoreStage := checked + "_priority"
+		identityStage := checked + "_identity"
 		chains[checked] = []nativeScope{
 			nativeVerdict("jump", transport.name+"_origin_restore"),
 			nativeJoin(
 				nativeDynamicDelete(leg.name+"_origin_proof", keyText+" : meta priority", key, guardMeta("priority")),
 				nativeDynamicUpdate(leg.name+"_origin_proof", keyText+" : meta priority", key, guardMeta("priority")),
+				nativeVerdict("goto", identityStage)),
+			nativeVerdict("drop", ""),
+		}
+		chains[identityStage] = []nativeScope{
+			nativeVerdict("jump", transport.name+"_origin_identity_restore"),
+			nativeJoin(
+				nativeDynamicDelete(leg.name+"_identity_proof", keyText+" : meta priority", key, guardMeta("priority")),
+				nativeDynamicUpdate(leg.name+"_identity_proof", keyText+" : meta priority", key, guardMeta("priority")),
 				nativeVerdict("goto", restoreStage)),
 			nativeVerdict("drop", ""),
 		}
@@ -22,7 +31,10 @@ func (transport *nativeNAT64Transport) exportChains(leg nativeNAT64Leg, checked,
 			nativeVerdict("goto", tokenStage),
 		}
 	} else {
-		chains[checked] = []nativeScope{nativeVerdict("goto", tokenStage)}
+		chains[checked] = []nativeScope{
+			nativeVerdict("jump", "native_translation_facts_capture"),
+			nativeVerdict("goto", tokenStage),
+		}
 	}
 	tokenText, token := transport.token()
 	chains[tokenStage] = []nativeScope{nativeJoin(

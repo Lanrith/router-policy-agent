@@ -193,7 +193,9 @@ func (transport *nativeNAT64Transport) definitions() []string {
 		key, _ := leg.tuple(false)
 		result = append(result, fmt.Sprintf("map %s_proof { typeof %s : meta priority; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, key))
 		if leg.reply {
-			result = append(result, fmt.Sprintf("map %s_origin_proof { typeof %s : meta priority; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, key))
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				result = append(result, fmt.Sprintf("map %s%s { typeof %s : meta priority; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, suffix, key))
+			}
 		}
 	}
 	return result
@@ -210,9 +212,11 @@ func (transport *nativeNAT64Transport) tupleProofClears() []any {
 			Family: "inet", Table: ownedTable, Name: leg.name + "_proof",
 		}}})
 		if leg.reply {
-			operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{
-				Family: "inet", Table: ownedTable, Name: leg.name + "_origin_proof",
-			}}})
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{
+					Family: "inet", Table: ownedTable, Name: leg.name + suffix,
+				}}})
+			}
 		}
 	}
 	return operations
@@ -326,6 +330,9 @@ func (leg nativeNAT64Leg) allocation(transport *nativeNAT64Transport, imported b
 // checked by the caller independently before and after this correlation.
 func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 	chains := transport.originChains()
+	for name, rules := range transport.originIdentityChains() {
+		chains[name] = rules
+	}
 	chains[transport.name+"_export_priority"] = transport.exportPriorityChain()
 	for _, leg := range transport.legs {
 		for _, imported := range []bool{false, true} {
@@ -344,12 +351,19 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 					nativeJoin(nativeMangle("meta mark set "+keyText+" map @"+leg.name+"_proof", guardMeta("mark"), proof), nativeVerdict("goto", tokenStage)), nativeVerdict("drop", ""))
 				origin := transport.name + "_origin"
 				originStage := checked + "_origin"
+				continuation := originStage
 				if leg.reply {
 					chains[tokenStage] = []nativeScope{
 						nativeJoin(nativeMangle("meta priority set "+keyText+" map @"+leg.name+"_origin_proof", guardMeta("priority"), map[string]any{"map": map[string]any{"key": key, "data": "@" + leg.name + "_origin_proof"}}), nativeVerdict("goto", originStage)),
 						nativeVerdict("drop", ""),
 					}
-					chains[originStage] = []nativeScope{nativeVerdict("jump", origin+"_connection")}
+					continuation = checked + "_identity"
+					chains[originStage] = []nativeScope{
+						nativeVerdict("jump", origin+"_connection"),
+						nativeJoin(nativeMangle("meta priority set "+keyText+" map @"+leg.name+"_identity_proof", guardMeta("priority"), map[string]any{"map": map[string]any{"key": key, "data": "@" + leg.name + "_identity_proof"}}), nativeVerdict("goto", continuation)),
+						nativeVerdict("drop", ""),
+					}
+					chains[continuation] = []nativeScope{nativeVerdict("jump", origin+"_identity_connection")}
 				} else {
 					chains[tokenStage] = []nativeScope{
 						nativeJoin(nativeMangle("meta priority set meta mark map @"+transport.name+"_token_origin", guardMeta("priority"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_origin"}}), nativeVerdict("goto", originStage)),
@@ -357,7 +371,7 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 					}
 					chains[originStage] = []nativeScope{nativeVerdict("jump", origin+"_capture")}
 				}
-				chains[originStage] = append(chains[originStage], nativeJoin(
+				chains[continuation] = append(chains[continuation], nativeJoin(
 					nativeMangle("meta priority set meta mark map @"+transport.name+"_token_channel", guardMeta("priority"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_channel"}}),
 					nativeVerdict("goto", channelStage)), nativeVerdict("drop", ""))
 				expectedEpoch := map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_epoch"}}
@@ -373,7 +387,11 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 				}
 				chains[contextStage] = []nativeScope{nativeJoin(
 					nativeMangle("meta mark set meta mark map @"+transport.name+"_token_context", guardMeta("mark"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_context"}}),
-					nativeVerdict("return", "")), nativeVerdict("drop", "")}
+					nativeVerdict("goto", contextStage+"_restored")), nativeVerdict("drop", "")}
+				if !leg.reply {
+					chains[contextStage+"_restored"] = []nativeScope{nativeVerdict("jump", origin+"_identity_capture")}
+				}
+				chains[contextStage+"_restored"] = append(chains[contextStage+"_restored"], nativeVerdict("return", ""))
 				continue
 			}
 			for name, rules := range transport.exportChains(leg, checked, keyText, key) {
@@ -426,10 +444,12 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 		header["map"], header["flags"], header["timeout"] = "classid", []string{"timeout", "dynamic"}, 2
 		schema.maps[name] = header
 		if leg.reply {
-			name := leg.name + "_origin_proof"
-			header := guardSetHeader("inet", name, map[string]any{"typeof": key}, 1024)
-			header["map"], header["flags"], header["timeout"] = "classid", []string{"timeout", "dynamic"}, 2
-			schema.maps[name] = header
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				name := leg.name + suffix
+				header := guardSetHeader("inet", name, map[string]any{"typeof": key}, 1024)
+				header["map"], header["flags"], header["timeout"] = "classid", []string{"timeout", "dynamic"}, 2
+				schema.maps[name] = header
+			}
 		}
 	}
 	for name, rules := range transport.chains() {

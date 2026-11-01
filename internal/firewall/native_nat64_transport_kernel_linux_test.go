@@ -288,7 +288,9 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 	for _, leg := range transport.legs {
 		inspect = append(inspect, struct{ kind, name string }{"map", leg.name + "_proof"})
 		if leg.reply {
-			inspect = append(inspect, struct{ kind, name string }{"map", leg.name + "_origin_proof"})
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				inspect = append(inspect, struct{ kind, name string }{"map", leg.name + suffix})
+			}
 		}
 	}
 	for _, object := range inspect {
