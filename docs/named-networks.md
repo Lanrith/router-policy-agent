@@ -231,6 +231,15 @@ Token and allocation publication withdraw target lookups, physical origin maps
 and all twelve tuple proofs together. The required native fixture includes rule/context zero and
 stale tuple withdrawal; real-TAYGA fixtures cover both target authorization modes.
 
+Target grant qualification also compiles raw directory policies and bindings
+through the authorization compiler, renderer and deny-only classifier. The
+translator fixture uses those unchanged compiled grants, including temporary
+policy expiry. Inactive accounts, placement alone, missing ownership, earlier
+denies and incompatible ports or protocols produce no target grant. Encoded
+target addresses retained in classification history are checked against the
+actual IPv4 target after translation. Raw carrier egress retains its source
+identity, floor and epoch checks while supplying connectivity to the translator.
+
 These fixtures use synthetic ownership and source readiness. Target-grant
 selection for already owned IPv6 callers, grants using dynamic source aliases
 and IPv4-initiated callbacks through NAT64 source aliases still require

@@ -103,8 +103,6 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 	access.add(reply, nativeVerdict("jump", "validate_source"))
 	access.add(replyConfirm, nativeVerdict("jump", "native_forward_floor"))
 	access.add(replyConfirm, nativeVerdict("jump", "validate_source"))
-	access.add(translatedReply, nativeVerdict("jump", "validate_source"))
-	access.add(translatedReplyConfirm, nativeVerdict("jump", "validate_source"))
 	for _, transport := range transports {
 		for _, leg := range transport.legs {
 			if err := ctx.Err(); err != nil {
@@ -163,11 +161,14 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 			rawGrantGeometry := nativeJoin(leg.grantGeometry(true), leg.allocation(transport, true))
 			rawGrant, rawDelegated := nativeNAT64Grant(leg, true)
 			access.add(translatedReply, rawGeometry, nativeVerdict("jump", leg.name+"_import"))
+			translatedSource := access.compileNAT64TranslatedSource(transport, leg)
+			access.add(translatedReply, rawGeometry, nativeVerdict("jump", translatedSource))
 			access.add(translatedReply, rawGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(translatedReply, rawGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if rawDelegated {
 				access.add(translatedReply, rawGrantGeometry, nativeNAT64CurrentDirectory(true, rawGrant), nativeVerdict("accept", ""))
 			}
+			access.add(translatedReplyConfirm, rawGeometry, nativeVerdict("jump", translatedSource))
 			access.add(translatedReplyConfirm, rawGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(translatedReplyConfirm, rawGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if rawDelegated {

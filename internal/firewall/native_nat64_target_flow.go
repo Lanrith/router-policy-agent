@@ -63,6 +63,24 @@ func nativeNAT64CurrentTarget(leg nativeNAT64Leg, imported, directory bool) nati
 	return scope
 }
 
+// The return import has already verified its exact tuple and connection
+// provenance. A classified encoded IPv6 source is the current owned IPv4
+// target, not a native IPv6 sender on the translator attachment. Validate that
+// independently bound target UID/address/epoch before continuing permission
+// checks. Other authority kinds keep ordinary source validation.
+func (access *nativeAccess) compileNAT64TranslatedSource(transport *nativeNAT64Transport, leg nativeNAT64Leg) string {
+	chain := transport.name + "_translated_source"
+	if _, exists := access.inet[chain]; exists {
+		return chain
+	}
+	for _, directory := range []bool{false, true} {
+		access.add(chain, nativeNAT64CurrentTarget(leg, true, directory), nativeVerdict("return", ""))
+	}
+	access.add(chain, nativeVerdict("jump", "validate_source"))
+	access.add(chain, nativeVerdict("return", ""))
+	return chain
+}
+
 // Physical checks consume the current target authority before replacing the
 // priority channel with its independently bound configuration origin.
 func (access *nativeAccess) compileNAT64TargetPhysical(transport *nativeNAT64Transport, leg nativeNAT64Leg, imported, directory bool) string {

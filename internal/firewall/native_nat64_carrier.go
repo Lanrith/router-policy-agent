@@ -76,6 +76,17 @@ func (access *nativeAccess) compileNAT64Carrier(ctx context.Context, transport *
 		return err
 	}
 	prefix := transport.name + "_carrier"
+	// The encoded destination may be in deny-only device history. Its actual
+	// IPv4 ownership is checked after translation and at physical target egress;
+	// the translator attachment cannot satisfy a native device/MAC lookup.
+	// This boundary admits only carrier connectivity, retaining the complete
+	// source floor below and the independently current source/configuration epoch.
+	physicalAdmitted := prefix + "_physical_admitted"
+	access.netdev[physicalAdmitted] = []nativeScope{
+		nativeJoin(nativeMark(0xff000000, nativeTag(true, false)), nativeVerdict("goto", "native_final_configuration")),
+		nativeJoin(nativeMark(0xff000000, nativeTag(false, false)), nativeNAT64SourceLive(), nativeVerdict("goto", "native_final_source")),
+		nativeVerdict("drop", ""),
+	}
 	for _, hook := range []string{"guard_forward", "permit_flow"} {
 		entry := transport.name + "_ordered_" + hook
 		for pathIndex, raw := range programs {
@@ -100,7 +111,7 @@ func (access *nativeAccess) compileNAT64Carrier(ctx context.Context, transport *
 		for index, rule := range access.ruleSet.rules {
 			if nativeNAT64RuleEligible(rule, transport) {
 				rule.Authorization = "owner"
-				access.compileDecisionNamed(prefix, index, rule, hook, false, access.managed)
+				access.compileDecisionNamed(prefix, index, rule, hook, false, access.managed, true)
 			}
 		}
 	}
@@ -125,7 +136,7 @@ func (access *nativeAccess) compileNAT64Carrier(ctx context.Context, transport *
 						// context selected by this raw connection. Other rule
 						// contexts cannot borrow its physical permission.
 						access.netdev[branch] = append(access.netdev[branch], nativeJoin(scope,
-							nativePhysicalKinds("owner", false, ids), nativeVerdict("goto", "native_physical_admitted")))
+							nativePhysicalKinds("owner", false, ids), nativeVerdict("goto", physicalAdmitted)))
 					}
 					access.netdev[branch] = append(access.netdev[branch], nativeJoin(scope, nativeVerdict("return", "")))
 				}

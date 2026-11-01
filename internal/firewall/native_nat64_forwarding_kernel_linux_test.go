@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"os"
+	"os/exec"
+	"slices"
 	"testing"
 	"time"
 
@@ -245,6 +248,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 	}
 	executeGuardFixture(ctx, t, preparedConfiguration.batch.data)
 	var sources *nativeSourcePublication
+	var ownershipBindings binding.Snapshot
 	publishOwnership := func(epoch uint32, targetMAC string) {
 		now := time.Now().Round(0).UTC()
 		snapshot := binding.Snapshot{SchemaVersion: 1, Generation: "nat64-owner", ObservedAt: now, Complete: true,
@@ -275,6 +279,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		if err != nil {
 			t.Fatal(err)
 		}
+		ownershipBindings = snapshot
 	}
 	if sourceOwned || targetOwned {
 		publishOwnership(19, "02:00:00:00:00:14")
@@ -301,21 +306,17 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 	}
 	publishDirectory := func(timeout int, enabled bool, protocols ...string) {
 		t.Helper()
+		if len(protocols) == 0 {
+			protocols = []string{"tcp", "udp"}
+		}
 		logical := guardChanges{}
 		for _, name := range grantSets {
 			logical.Commands = append(logical.Commands, change{Flush: &setChange{Set: ownedRef(name)}})
 		}
-		if enabled {
-			if len(protocols) == 0 {
-				protocols = []string{"tcp", "udp"}
-			}
+		if enabled && !targetOwned {
 			for _, protocol := range protocols {
 				fields := []any{"lan10", "02:00:00:00:00:10", "fdca:1a2b::10", grantPeer, 6061}
 				name := "lease_from6_" + protocol
-				if targetOwned {
-					fields = []any{"lan13", "02:00:00:00:00:14", "10.240.4.11", "10.251.0.10", 6061}
-					name = "lease_to4_" + protocol
-				}
 				value, marshalErr := json.Marshal(map[string]any{"elem": map[string]any{"timeout": timeout, "val": map[string]any{"concat": fields}}})
 				if marshalErr != nil {
 					t.Fatal(marshalErr)
@@ -327,12 +328,58 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
+		anchor := policy.CaptureAge()
 		utc, started := time.Now().UTC(), time.Now()
+		logicalBatch := &preparedBatch{data: data, preparedAt: utc, startedAt: started, startBefore: utc.Add(preparationBudget)}
 		history := &state.Classification{MACs: []string{"02:00:00:00:00:10"}, IPv4: []string{}, IPv6: []string{"fdca:1a2b::10"}}
 		if targetOwned {
-			history = &state.Classification{MACs: []string{"02:00:00:00:00:14"}, IPv4: []string{"10.240.4.11"}, IPv6: []string{}}
+			history = &state.Classification{MACs: []string{"02:00:00:00:00:14"}, IPv4: []string{}, IPv6: []string{}}
+			_, _, _, input := renderFixture(t)
+			input.Now, input.Directory.ObservedAt, input.Bindings = utc, utc, ownershipBindings
+			input.Directory.Groups = input.Directory.Groups[:1]
+			device := &input.Directory.Devices[0]
+			device.MAC, device.Active, device.GroupIDs = "02:00:00:00:00:14", enabled, []string{input.Directory.Groups[0].ID}
+			// A temporary directory policy supplies the short expiry itself;
+			// the rendered/privileged grant bytes are never edited afterward.
+			expires := utc.Add(time.Duration(timeout)*time.Second + preparationBudget + commandBudget + time.Second - time.Nanosecond)
+			for _, protocol := range protocols {
+				group := rendererAccessGroup(t, "target-"+protocol, true, policy.Rule{ID: "listener", Direction: policy.ToDevice,
+					Peer: policy.Peer{Addresses: []string{"fdca:1a2b::10/128"}}, Protocol: protocol, DestinationPorts: []uint16{6061},
+					Reason: "Synthetic translated target listener", ExpiresAt: &expires})
+				input.Directory.Groups = append(input.Directory.Groups, group)
+				device.GroupIDs = append(device.GroupIDs, group.ID)
+			}
+			authorization, compileErr := compiler.CompileAuthorization(ctx, input, anchor)
+			if compileErr != nil {
+				t.Fatal(compileErr)
+			}
+			candidate, compileErr := authorization.Snapshot(ctx)
+			want := 0
+			if enabled {
+				want = len(protocols)
+			}
+			if compileErr != nil || len(candidate.Grants) != want {
+				t.Fatal("raw directory target policy did not compile its exact grants", compileErr, candidate.Denials, len(candidate.Grants), want)
+			}
+			addresses, compileErr := compiler.ClassifyBindings(ctx, input.Bindings, history.MACs, utc)
+			if compileErr != nil {
+				t.Fatal(compileErr)
+			}
+			for _, address := range addresses {
+				if address.Is4() {
+					history.IPv4 = append(history.IPv4, address.String())
+				} else {
+					history.IPv6 = append(history.IPv6, address.String())
+				}
+			}
+			slices.Sort(history.IPv4)
+			slices.Sort(history.IPv6)
+			logicalBatch, compileErr = renderer.prepare(ctx, replacement{authorization: authorization, now: utc, cohort: history.MACs})
+			if compileErr != nil {
+				t.Fatal(compileErr)
+			}
 		}
-		mapped, prepareErr := prepareMappedGuards(ctx, &preparedBatch{data: data, preparedAt: utc, startedAt: started, startBefore: utc.Add(preparationBudget)}, history, nil)
+		mapped, prepareErr := prepareMappedGuards(ctx, logicalBatch, history, nil)
 		if prepareErr != nil {
 			t.Fatal(prepareErr)
 		}
@@ -351,7 +398,16 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		logNativeAccessSchema(ctx, t, layout)
 		t.Fatal("joined NAT64 layout differs from its fixed schema", err)
 	}
+	if targetOwned {
+		monitorNAT64TargetTrace(ctx, t)
+	}
 	packetNft(ctx, t, `table inet n64_join_trace {
+	chain raw_start { type filter hook prerouting priority -301; policy accept;
+	 iifname "lan10" ip6 saddr fdca:1a2b::10 udp dport 6061 meta nftrace set 1
+	 iifname "nat64-internal" ip saddr 10.251.0.0/24 udp dport 6061 meta nftrace set 1
+	 iifname "lan13" ip saddr 10.240.4.11 udp sport 6061 meta nftrace set 1
+	 iifname "nat64-internal" ip6 saddr fdca:1a2b:e064::/96 udp sport 6061 meta nftrace set 1
+	}
  counter wire_before {}
  counter wire_after_early {}
  counter wire_before_confirm {}
@@ -363,6 +419,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
  chain wire_after_confirm { type filter hook forward priority 151; policy accept; iifname "nat64-internal" ip saddr 10.251.0.0/24 counter name wire_after_confirm; }
  chain wire_post { type filter hook postrouting priority 202; policy accept; oifname "wan" ip saddr 10.251.0.0/24 counter name wire_post; }
 }
+
 table netdev n64_join_trace {
  counter wire_physical_before {}
  counter wire_physical_after {}
@@ -742,4 +799,38 @@ add rule inet n64_join_trace wire_post oifname "lan13" ip saddr 10.251.0.0/24 ct
 	withdrawn.destination, withdrawn.sourcePort, withdrawn.payload = encoded, portBase+16, fmt.Sprintf("withdrawn-%d", time.Now().UnixNano())
 	sendPacket(ctx, t, client, packetFrame(t, withdrawn))
 	rejectNATPayload(ctx, t, internet, withdrawn.payload)
+}
+
+func monitorNAT64TargetTrace(ctx context.Context, t *testing.T) {
+	t.Helper()
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	file, err := root.Create("nat64-target-trace.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	monitor := exec.CommandContext(ctx, "/usr/bin/stdbuf", "-oL", "-eL", "/usr/sbin/nft", "monitor", "trace")
+	monitor.Stdout, monitor.Stderr = file, file
+	monitor.Env = []string{"LC_ALL=C", "PATH=/usr/sbin:/usr/bin"}
+	if err := monitor.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := monitor.Wait(); err != nil && ctx.Err() == nil {
+			t.Error(err)
+		}
+		if t.Failed() {
+			data, err := root.ReadFile("nat64-target-trace.log")
+			if err == nil {
+				if len(data) > 16000 {
+					data = data[len(data)-16000:]
+				}
+				t.Logf("synthetic NAT64 target trace: %s", data)
+			}
+		}
+	})
 }

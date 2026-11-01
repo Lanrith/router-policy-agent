@@ -317,10 +317,10 @@ func (access *nativeAccess) checkCapacity(interfaces []string) error {
 }
 
 func (access *nativeAccess) compileDecision(index int, rule policy.NetworkRule, hook string, reply bool, managed []string) {
-	access.compileDecisionNamed("native", index, rule, hook, reply, managed)
+	access.compileDecisionNamed("native", index, rule, hook, reply, managed, false)
 }
 
-func (access *nativeAccess) compileDecisionNamed(prefix string, index int, rule policy.NetworkRule, hook string, reply bool, managed []string) {
+func (access *nativeAccess) compileDecisionNamed(prefix string, index int, rule policy.NetworkRule, hook string, reply bool, managed []string, sourceOnly bool) {
 	direction, states := "original", []string{"established", "new"}
 	if reply {
 		direction, states = "reply", []string{"established"}
@@ -339,8 +339,15 @@ func (access *nativeAccess) compileDecisionNamed(prefix string, index int, rule 
 		access.add(chain, nativeVerdict("jump", "native_grant"))
 		access.add(chain, nativeVerdict("goto", chain+"_delegated"))
 	} else {
+		interfaces, addresses := []string{"iifname", "oifname"}, []string{"saddr", "daddr"}
+		if sourceOnly {
+			// NAT64 carrier provenance describes the original source. A
+			// classified encoded target has separate wire authority and must
+			// not change this connection's source kind or epoch.
+			interfaces, addresses = interfaces[:1], addresses[:1]
+		}
 		for _, iface := range managed {
-			for _, field := range []string{"iifname", "oifname"} {
+			for _, field := range interfaces {
 				target := chain + "_source"
 				if rule.Authorization == "inherit" {
 					target = chain + "_directory"
@@ -350,7 +357,7 @@ func (access *nativeAccess) compileDecisionNamed(prefix string, index int, rule 
 		}
 		access.add(chain, nativeMatch("ether saddr @"+cohortSet, guardPayload("ether", "saddr"), "@"+cohortSet), nativeVerdict("goto", chain+"_source"))
 		for _, family := range []struct{ protocol, set string }{{"ip", classified4Set}, {"ip6", classified6Set}} {
-			for _, field := range []string{"saddr", "daddr"} {
+			for _, field := range addresses {
 				access.add(chain, nativeMatch(family.protocol+" "+field+" @"+family.set, guardPayload(family.protocol, field), "@"+family.set), nativeVerdict("goto", chain+"_source"))
 			}
 		}
