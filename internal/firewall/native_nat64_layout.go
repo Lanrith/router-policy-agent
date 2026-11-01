@@ -2,7 +2,6 @@ package firewall
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -127,23 +126,15 @@ func (access *nativeAccess) compileNAT64Requests(
 		return err
 	}
 	chain := transport.name + "_request"
-	seen := map[string]bool{}
-	for _, path := range paths {
-		// Generic translator rules often yield identical raw programs on
-		// several final interfaces. Deduplicate exact encodings only here,
-		// where the existential result records demand and grants no access.
-		encoded, err := json.Marshal(path.raw.rules)
-		if err != nil {
-			return errors.New("firewall: NAT64 request path encoding failed")
-		}
-		if seen[string(encoded)] {
-			continue
-		}
-		seen[string(encoded)] = true
-		branch := chain + "_path_" + strconv.Itoa(len(seen)-1)
+	programs, err := nativeNAT64RawPrograms(ctx, paths)
+	if err != nil {
+		return err
+	}
+	for pathIndex, raw := range programs {
+		branch := chain + "_path_" + strconv.Itoa(pathIndex)
 		access.add(chain, nativeVerdict("jump", branch))
-		for index, rule := range path.raw.rules {
-			scopes, err := path.raw.scopes(ctx, index, false, false)
+		for index, rule := range raw.rules {
+			scopes, err := raw.scopes(ctx, index, false, false)
 			if err != nil {
 				return err
 			}

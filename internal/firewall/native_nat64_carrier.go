@@ -71,14 +71,18 @@ func (access *nativeAccess) compileNAT64CarrierContexts(ctx context.Context, tra
 // A carrier admits connectivity only to the selected translator. It binds
 // source provenance independently of destination permission or grant presence.
 func (access *nativeAccess) compileNAT64Carrier(ctx context.Context, transport *nativeNAT64Transport, paths []nativeNAT64EgressPolicy) error {
+	programs, err := nativeNAT64RawPrograms(ctx, paths)
+	if err != nil {
+		return err
+	}
 	prefix := transport.name + "_carrier"
 	for _, hook := range []string{"guard_forward", "permit_flow"} {
 		entry := transport.name + "_ordered_" + hook
-		for pathIndex, path := range paths {
+		for pathIndex, raw := range programs {
 			branch := fmt.Sprintf("%s_%d", entry, pathIndex)
 			access.add(entry, nativeVerdict("jump", branch))
-			for index, rule := range path.raw.rules {
-				scopes, err := path.raw.scopes(ctx, index, false, false)
+			for index, rule := range raw.rules {
+				scopes, err := raw.scopes(ctx, index, false, false)
 				if err != nil {
 					return err
 				}
@@ -107,11 +111,11 @@ func (access *nativeAccess) compileNAT64Carrier(ctx context.Context, transport *
 		}
 		access.compilePhysicalContextSource(chain, group.iface, nil)
 		packet := nativePacketContext{iface: group.iface, mac: group.mac, family: 6}
-		for pathIndex, path := range paths {
+		for pathIndex, raw := range programs {
 			branch := fmt.Sprintf("%s_%d", chain, pathIndex)
 			access.netdev[chain] = append(access.netdev[chain], nativeVerdict("jump", branch))
-			for index, rule := range path.raw.rules {
-				scopes, err := path.raw.physicalScopes(ctx, index, packet, false, false)
+			for index, rule := range raw.rules {
+				scopes, err := raw.physicalScopes(ctx, index, packet, false, false)
 				if err != nil {
 					return err
 				}

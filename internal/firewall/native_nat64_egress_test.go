@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,5 +106,61 @@ func TestNAT64EgressPlansRejectMissingOrChangedOrigin(t *testing.T) {
 	cancel()
 	if _, err := nativeNAT64EgressPolicies(ctx, rules, transport); !errors.Is(err, context.Canceled) {
 		t.Fatal("cancelled final-egress projection proceeded", err)
+	}
+}
+
+func TestNAT64RawProgramSharingRetainsFirstOriginAndCompleteOrder(t *testing.T) {
+	t.Parallel()
+	first := &nativeRuleSet{baselineHash: strings.Repeat("a", 64), rules: []policy.NetworkRule{{
+		Action: "allow", Authorization: "owner", Protocol: "udp", Ports: []uint16{6061},
+		From: []policy.NetworkSelector{{Interface: "lan10", MAC: "02:00:00:00:00:10"}},
+		To:   []policy.NetworkSelector{{Interface: "nat64-internal"}},
+	}}}
+	for _, edit := range []func(*policy.NetworkRule){
+		func(rule *policy.NetworkRule) { rule.Action = "deny" },
+		func(rule *policy.NetworkRule) { rule.Authorization = "directory" },
+		func(rule *policy.NetworkRule) { rule.Protocol = "tcp" },
+		func(rule *policy.NetworkRule) { rule.Ports = []uint16{6062} },
+		func(rule *policy.NetworkRule) { rule.From = []policy.NetworkSelector{{Interface: "lan11"}} },
+		func(rule *policy.NetworkRule) { rule.From = []policy.NetworkSelector{{MAC: "02:00:00:00:00:11"}} },
+		func(rule *policy.NetworkRule) {
+			rule.To = []policy.NetworkSelector{{Addresses: sourceClassPrefixes("fdca:1a2b:e064::/96")}}
+		},
+	} {
+		changed := &nativeRuleSet{baselineHash: first.baselineHash, rules: slices.Clone(first.rules)}
+		edit(&changed.rules[0])
+		duplicate := &nativeRuleSet{baselineHash: first.baselineHash, rules: first.rules}
+		paths := []nativeNAT64EgressPolicy{{iface: "wan", raw: first}, {iface: "lan13", raw: duplicate},
+			{iface: "lan11", raw: changed}, {iface: "lan12", raw: first}}
+		programs, err := nativeNAT64RawPrograms(t.Context(), paths)
+		if err != nil || len(programs) != 2 || programs[0] != first || programs[1] != changed {
+			t.Fatal("sharing changed the first origin or merged a distinct ordered predicate", err)
+		}
+		if len(paths) != 4 || paths[1].iface != "lan13" || paths[1].raw != duplicate {
+			t.Fatal("raw sharing changed the independent final-interface inventory")
+		}
+	}
+}
+
+func TestNAT64RawProgramSharingRejectsMissingForeignOrCancelledOrigin(t *testing.T) {
+	t.Parallel()
+	first := &nativeRuleSet{baselineHash: strings.Repeat("a", 64)}
+	for _, paths := range [][]nativeNAT64EgressPolicy{
+		nil, {{}}, {{raw: &nativeRuleSet{}}}, {{raw: first}, {}},
+		{{raw: first}, {raw: &nativeRuleSet{baselineHash: strings.Repeat("b", 64)}}},
+	} {
+		if _, err := nativeNAT64RawPrograms(t.Context(), paths); err == nil {
+			t.Fatal("sharing accepted a missing or foreign origin")
+		}
+	}
+	paths := []nativeNAT64EgressPolicy{{raw: first}}
+	var missing context.Context
+	if _, err := nativeNAT64RawPrograms(missing, paths); err == nil {
+		t.Fatal("sharing accepted a missing context")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := nativeNAT64RawPrograms(ctx, paths); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled raw program sharing proceeded", err)
 	}
 }

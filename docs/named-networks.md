@@ -203,6 +203,9 @@ connection's immutable source marker. The token registry binds both markers
 without allowing two origins for one lookup key. Physical raw admission shares
 interface/MAC programs while retaining the exact winning source context and all
 source-floor checks; it does not raise the compiler's rule capacity.
+Exact duplicate raw programs also share one branch, preserving their first
+occurrence and complete rule order. Final-interface wire programs remain
+independent; only connectivity demand and raw carrier admission share branches.
 
 The real-TAYGA fixtures exercise different WAN/LAN winning rules and a LAN
 directory permission beside a WAN owner permission. Directory withdrawal and

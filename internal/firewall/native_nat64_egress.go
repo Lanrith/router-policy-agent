@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 
@@ -16,6 +17,34 @@ import (
 type nativeNAT64EgressPolicy struct {
 	iface string
 	raw   *nativeRuleSet
+}
+
+// Only raw connectivity may share identical ordered programs. The actual wire
+// decision still evaluates every final interface independently. Preserve the
+// first occurrence so sharing cannot change the carrier's selected origin.
+func nativeNAT64RawPrograms(ctx context.Context, paths []nativeNAT64EgressPolicy) ([]*nativeRuleSet, error) {
+	if ctx == nil || len(paths) == 0 || paths[0].raw == nil || paths[0].raw.baselineHash == "" {
+		return nil, errors.New("firewall: missing NAT64 raw program origin")
+	}
+	programs := make([]*nativeRuleSet, 0, len(paths))
+	seen := map[string]bool{}
+	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if path.raw == nil || path.raw.baselineHash != paths[0].raw.baselineHash {
+			return nil, errors.New("firewall: NAT64 raw programs differ from their origin")
+		}
+		encoded, err := json.Marshal(path.raw.rules)
+		if err != nil {
+			return nil, errors.New("firewall: NAT64 raw program encoding failed")
+		}
+		if !seen[string(encoded)] {
+			seen[string(encoded)] = true
+			programs = append(programs, path.raw)
+		}
+	}
+	return slices.Clip(programs), ctx.Err()
 }
 
 func nativeNAT64EgressPolicies(ctx context.Context, set *nativeRuleSet, transport *nativeNAT64Transport) ([]nativeNAT64EgressPolicy, error) {
