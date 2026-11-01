@@ -22,6 +22,15 @@ func nativeNAT64TargetTag(directory, reply bool) uint64 {
 	return tag
 }
 
+// A target key has eleven bits: the complete ten-bit rule index and direction.
+// Source UID helpers mask to ten bits and cannot encode this key.
+func nativeNAT64TargetKeyClassID(key uint32) string {
+	if key == 0 {
+		return "none"
+	}
+	return epochClassID(key)
+}
+
 // The source context and final rule are compiler identities. Target rows come
 // only from the current ownership receipt, never from a request or a listing.
 type nativeNAT64TargetBinding struct {
@@ -196,7 +205,7 @@ func (tokens *nativeNAT64Tokens) targetElements(ctx context.Context) ([]json.Raw
 		if !target.peer.Is4() || !interfaceName.MatchString(target.iface) || target.context > ownershipRuleMask || target.rule >= uint32(tokens.transport.ruleCount*2) {
 			return nil, errors.New("firewall: invalid NAT64 target token key")
 		} // #nosec G115 -- validated rule count is bounded to 1024.
-		raw, err := json.Marshal([]any{map[string]any{"concat": []any{nativeLowClassID(target.rule), target.context, target.iface, target.peer.String()}}, epochClassID(target.token)})
+		raw, err := json.Marshal([]any{map[string]any{"concat": []any{nativeNAT64TargetKeyClassID(target.rule), target.context, target.iface, target.peer.String()}}, epochClassID(target.token)})
 		if err != nil {
 			return nil, err
 		}

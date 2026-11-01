@@ -1,13 +1,57 @@
 package firewall
 
 import (
+	"encoding/json"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/lanrith/router-policy-agent/internal/binding"
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
+
+func TestNAT64TargetLookupPreservesCompleteRuleAndDirection(t *testing.T) {
+	t.Parallel()
+	transport := &nativeNAT64Transport{name: "n64_width", ruleCount: 1024}
+	tokens := &nativeNAT64Tokens{transport: transport}
+	for rule := uint32(0); rule < 2048; rule++ {
+		tokens.targets = append(tokens.targets, nativeNAT64TargetEntry{
+			nativeNAT64TargetBinding: nativeNAT64TargetBinding{rule: rule, context: 1, iface: "lan13", peer: netip.MustParseAddr("10.240.3.10")},
+			token:                    rule + 1,
+		})
+	}
+	rows, err := tokens.targetElements(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		var pair []json.RawMessage
+		if err := json.Unmarshal(row, &pair); err != nil || len(pair) != 2 {
+			t.Fatal("invalid target lookup row", err)
+		}
+		key := string(pair[0])
+		if seen[key] {
+			t.Fatal("distinct ordered rules or directions share a target lookup key", key)
+		}
+		seen[key] = true
+	}
+	if len(seen) != 2048 {
+		t.Fatal("target lookup lost part of the admitted rule space", len(seen))
+	}
+	for _, test := range []struct {
+		index int
+		reply bool
+		key   string
+	}{{0, false, "none"}, {512, false, "0:400"}, {1023, true, "0:7ff"}} {
+		access := &nativeAccess{inet: map[string][]nativeScope{}}
+		chain := access.compileNAT64TargetDecision(transport, test.index, "owner", test.reply)
+		if !strings.HasSuffix(access.inet[chain][0].text, "set "+test.key) {
+			t.Fatal("wire lookup truncated the ordered rule/direction key", access.inet[chain][0].text)
+		}
+	}
+}
 
 func newNAT64TargetTokenFixture(t *testing.T, configurationEpoch, ownershipEpoch uint32, authorization string, scope ...string) nat64TokenPlanFixture {
 	t.Helper()

@@ -17,7 +17,7 @@ func (access *nativeAccess) compileNAT64TargetDecision(transport *nativeNAT64Tra
 		keyID++
 	}
 	key := map[string]any{"concat": []any{guardMeta("priority"), guardBinary("&", guardMeta("mark"), ownershipRuleMask), guardMeta(iface), guardPayload("ip", peer)}}
-	access.add(chain, nativeMangle("meta priority set "+nativeLowClassID(uint32(keyID)), guardMeta("priority"), nativeLowClassID(uint32(keyID)))) // #nosec G115 -- doubled rule indices fit eleven bits.
+	access.add(chain, nativeMangle("meta priority set "+nativeNAT64TargetKeyClassID(uint32(keyID)), guardMeta("priority"), nativeNAT64TargetKeyClassID(uint32(keyID)))) // #nosec G115 -- doubled rule indices fit eleven bits.
 	access.add(chain, nativeMangle("meta priority set meta priority . (meta mark & 0x3ff) . "+iface+" . ip "+peer+" map @"+transport.name+"_target_tokens", guardMeta("priority"), map[string]any{"map": map[string]any{"key": key, "data": "@" + transport.name + "_target_tokens"}}), nativeVerdict("goto", chain+"_identity"))
 	access.add(chain, nativeVerdict("drop", ""))
 	directory := authorization == "directory"

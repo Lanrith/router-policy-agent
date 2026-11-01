@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"context"
+	"encoding/json"
 	"net/netip"
 	"slices"
 	"testing"
@@ -30,7 +31,59 @@ func TestKernelNamedNAT64WireLANOnlyPolicy(t *testing.T) {
 }
 
 func TestKernelNamedNAT64WireTargetOwnership(t *testing.T) {
+	t.Run("complete-rule-direction-key-space", testKernelNAT64TargetKeyWidth)
 	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, false, true)
+}
+
+func testKernelNAT64TargetKeyWidth(t *testing.T) {
+	requireKernelIsolation(t)
+	t.Cleanup(func() { requireKernelIsolation(t) })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	const table = "n64_target_width"
+	packetNft(ctx, t, "table inet "+table+" {\n map targets { type classid . mark . ifname . ipv4_addr : classid; }\n}\n")
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
+		defer done()
+		packetNft(cleanup, t, "delete table inet "+table)
+	})
+	tokens := &nativeNAT64Tokens{transport: &nativeNAT64Transport{ruleCount: 1024}}
+	for index, key := range []uint32{0, 1024, 2047} {
+		tokens.targets = append(tokens.targets, nativeNAT64TargetEntry{
+			nativeNAT64TargetBinding: nativeNAT64TargetBinding{rule: key, context: 1, iface: "lan13", peer: netip.MustParseAddr("10.240.3.10")},
+			token:                    uint32(index + 1), // #nosec G115 -- three fixture entries.
+		})
+	}
+	rows, err := tokens.targetElements(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"nftables": []any{map[string]any{"add": map[string]any{"element": map[string]any{
+		"family": "inet", "table": table, "name": "targets", "elem": rows,
+	}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeGuardFixture(ctx, t, data)
+	var listing struct {
+		Objects []struct {
+			Map *struct {
+				Elements []json.RawMessage `json:"elem"`
+			} `json:"map"`
+		} `json:"nftables"`
+	}
+	if err := json.Unmarshal(kernelFixtureCommand(ctx, t, "list", "map", "inet", table, "targets"), &listing); err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, object := range listing.Objects {
+		if object.Map != nil {
+			count += len(object.Map.Elements)
+		}
+	}
+	if count != 3 {
+		t.Fatal("kernel target keys collided across the supported rule space", count)
+	}
 }
 
 func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, sourceOwned, lanOnly, targetOwned bool) {
