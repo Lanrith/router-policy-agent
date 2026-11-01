@@ -141,7 +141,7 @@ func (tokens *nativeNAT64Tokens) publicationData(ctx context.Context) ([]byte, e
 }
 
 func (tokens *nativeNAT64Tokens) names() []string {
-	return []string{tokens.transport.name + "_tokens", tokens.transport.name + "_token_epoch", tokens.transport.name + "_token_context", tokens.transport.name + "_token_channel", tokens.transport.name + "_token_epoch_pairs"}
+	return []string{tokens.transport.name + "_tokens", tokens.transport.name + "_token_epoch", tokens.transport.name + "_token_context", tokens.transport.name + "_token_channel", tokens.transport.name + "_token_origin", tokens.transport.name + "_token_epoch_pairs"}
 }
 
 func (tokens *nativeNAT64Tokens) elements(ctx context.Context) (map[string][]json.RawMessage, error) {
@@ -166,6 +166,7 @@ func (tokens *nativeNAT64Tokens) elements(ctx context.Context) (map[string][]jso
 			[]any{entry.token, state.epoch},
 			[]any{entry.token, state.context},
 			[]any{entry.token, epochClassID(state.channel)},
+			[]any{entry.token, epochClassID(state.epoch)},
 			map[string]any{"concat": []any{state.epoch, entry.token}},
 		}
 		for index, value := range values {

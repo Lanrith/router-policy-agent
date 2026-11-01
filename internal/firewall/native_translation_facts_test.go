@@ -24,7 +24,7 @@ func TestTranslationFactsReserveOnlyAuthorizationBits(t *testing.T) {
 			t.Fatal("packet QoS or saved priority became sticky authorization")
 		}
 	}
-	if seen[nativeFactsValidBit] || seen[31] {
+	if seen[nativeFactsValidBit] || seen[nativeNAT64OriginValidBit] || seen[31] {
 		t.Fatal("facts consumed an independently owned label field")
 	}
 }

@@ -276,10 +276,13 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 	}
 	inspect := []struct{ kind, name string }{{"map", transport.name + "_zones"}, {"map", transport.name + "_aliases"},
 		{"set", transport.name + "_active_aliases"}, {"set", transport.name + "_sources"},
-		{"map", transport.name + "_tokens"}, {"map", transport.name + "_token_epoch"}, {"map", transport.name + "_token_context"}, {"map", transport.name + "_token_channel"},
+		{"map", transport.name + "_tokens"}, {"map", transport.name + "_token_epoch"}, {"map", transport.name + "_token_context"}, {"map", transport.name + "_token_channel"}, {"map", transport.name + "_token_origin"},
 		{"set", transport.name + "_token_epoch_pairs"}}
 	for _, leg := range transport.legs {
 		inspect = append(inspect, struct{ kind, name string }{"map", leg.name + "_proof"})
+		if leg.reply {
+			inspect = append(inspect, struct{ kind, name string }{"map", leg.name + "_origin_proof"})
+		}
 	}
 	for _, object := range inspect {
 		// #nosec G204 -- Names originate in the reviewed synthetic fixture.

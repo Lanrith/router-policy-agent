@@ -153,11 +153,19 @@ translator proof, and replaces or clears them with the other allocation state.
 A different source's alias cannot be substituted by changing a serialized row.
 
 Token and allocation replacement or revocation also clear every TCP, UDP and
-ICMP tuple-proof map in the same kernel transaction. Opaque token IDs can be
-reassigned within the next registry; an old export must never acquire that
+ICMP authorization and origin proof map in the same kernel transaction. Opaque
+token IDs can be reassigned within the next registry; an old export must never acquire that
 registry's authority epoch. Packets in flight across publication can therefore
 be dropped. A permitted original must export a fresh tuple, and an old connection
 cannot acquire a newer configuration or ownership epoch through translation.
+
+An imported IPv4 connection retains the original IPv6 connection marker in
+separate conntrack labels. Repeated originals must match that saved marker.
+Replies export an additional timed tuple proof, and IPv6 return import compares
+it with the original connection. A changed marker, missing proof, conflicting
+label contents or confirmed connection without an origin is rejected. These
+checks preserve connection provenance independently of destination permission;
+the current ordered policy, ownership and grant checks still apply.
 
 The translator attachment's source floor permits only its IPv4 pool and IPv6
 translation prefix. WAN source validation rejects both ranges. These checks

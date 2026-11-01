@@ -13,7 +13,7 @@ spec.loader.exec_module(runner)
 class QualificationTests(unittest.TestCase):
     def test_default_batches_retain_the_whole_previous_suite_and_new_owner(self):
         batches = runner.vm_batches(runner.EXPECTED_TESTS)
-        self.assertEqual([14, 5, 10, 16], [len(batch) for batch in batches])
+        self.assertEqual([14, 5, 10, 18], [len(batch) for batch in batches])
         executed = [name for batch in batches for name in batch]
         self.assertEqual(runner.EXPECTED_TESTS, executed)
         self.assertEqual(len(executed), len(set(executed)))
@@ -32,6 +32,8 @@ class QualificationTests(unittest.TestCase):
                           'TestKernelNamedNAT64PendingPreservesLogicalDestinationOrder',
                           'TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes',
                           'TestKernelNamedNAT64WireSourceEpochAndAllocationScopes',
+                          'TestKernelNamedNAT64OriginCaptureAndConnectionBinding',
+                          'TestKernelNamedNAT64OriginReturnRequiresBothProofs',
                           'TestKernelNamedNAT64JoinedTAYGAConfiguration',
                           'TestKernelNamedNAT64JoinedTAYGAOwner',
                           'TestKernelNamedNAT64JoinedTAYGADirectory',

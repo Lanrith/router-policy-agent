@@ -72,9 +72,10 @@ func (prepared *preparedNAT64Allocations) expectedData(ctx context.Context) ([]b
 	for index := range prepared.transport.sourceScopes {
 		operations = append(operations, map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: prepared.transport.sourceScopeName(index)}}})
 	}
-	for index, name := range (&nativeNAT64Tokens{transport: prepared.transport}).names() {
+	tokenNames := (&nativeNAT64Tokens{transport: prepared.transport}).names()
+	for index, name := range tokenNames {
 		kind := "map"
-		if index == 4 {
+		if index == len(tokenNames)-1 {
 			kind = "set"
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
@@ -217,9 +218,10 @@ func nat64AllocationClearData(ctx context.Context, transport *nativeNAT64Transpo
 	for index := range transport.sourceScopes {
 		operations = append(operations, map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: transport.sourceScopeName(index)}}})
 	}
-	for index, name := range (&nativeNAT64Tokens{transport: transport}).names() {
+	tokenNames := (&nativeNAT64Tokens{transport: transport}).names()
+	for index, name := range tokenNames {
 		kind := "map"
-		if index == 4 {
+		if index == len(tokenNames)-1 {
 			kind = "set"
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})

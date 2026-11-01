@@ -182,6 +182,7 @@ func (transport *nativeNAT64Transport) definitions() []string {
 		fmt.Sprintf("map %s_token_epoch { type mark : mark; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_token_context { type mark : mark; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_token_channel { type mark : classid; size 65536; }", transport.name),
+		fmt.Sprintf("map %s_token_origin { type mark : classid; size 65536; }", transport.name),
 		fmt.Sprintf("set %s_token_epoch_pairs { type mark . mark; size 65536; }", transport.name),
 	}
 	for index := range transport.sourceScopes {
@@ -190,6 +191,9 @@ func (transport *nativeNAT64Transport) definitions() []string {
 	for _, leg := range transport.legs {
 		key, _ := leg.tuple(false)
 		result = append(result, fmt.Sprintf("map %s_proof { typeof %s : meta mark; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, key))
+		if leg.reply {
+			result = append(result, fmt.Sprintf("map %s_origin_proof { typeof %s : meta priority; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, key))
+		}
 	}
 	return result
 }
@@ -204,6 +208,11 @@ func (transport *nativeNAT64Transport) tupleProofClears() []any {
 		operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{
 			Family: "inet", Table: ownedTable, Name: leg.name + "_proof",
 		}}})
+		if leg.reply {
+			operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{
+				Family: "inet", Table: ownedTable, Name: leg.name + "_origin_proof",
+			}}})
+		}
 	}
 	return operations
 }
@@ -315,7 +324,7 @@ func (leg nativeNAT64Leg) allocation(transport *nativeNAT64Transport, imported b
 // Current ownership, allocation publication, ordered policy and grants must be
 // checked by the caller independently before and after this correlation.
 func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
-	chains := map[string][]nativeScope{}
+	chains := transport.originChains()
 	for _, leg := range transport.legs {
 		for _, imported := range []bool{false, true} {
 			direction := "export"
@@ -331,9 +340,24 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 				tokenStage, channelStage, epochStage, contextStage := checked+"_token", checked+"_channel", checked+"_epoch", checked+"_context"
 				chains[checked] = append(chains[checked],
 					nativeJoin(nativeMangle("meta mark set "+keyText+" map @"+leg.name+"_proof", guardMeta("mark"), proof), nativeVerdict("goto", tokenStage)), nativeVerdict("drop", ""))
-				chains[tokenStage] = []nativeScope{nativeJoin(
+				origin := transport.name + "_origin"
+				originStage := checked + "_origin"
+				if leg.reply {
+					chains[tokenStage] = []nativeScope{
+						nativeJoin(nativeMangle("meta priority set "+keyText+" map @"+leg.name+"_origin_proof", guardMeta("priority"), map[string]any{"map": map[string]any{"key": key, "data": "@" + leg.name + "_origin_proof"}}), nativeVerdict("goto", originStage)),
+						nativeVerdict("drop", ""),
+					}
+					chains[originStage] = []nativeScope{nativeVerdict("jump", origin+"_connection")}
+				} else {
+					chains[tokenStage] = []nativeScope{
+						nativeJoin(nativeMangle("meta priority set meta mark map @"+transport.name+"_token_origin", guardMeta("priority"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_origin"}}), nativeVerdict("goto", originStage)),
+						nativeVerdict("drop", ""),
+					}
+					chains[originStage] = []nativeScope{nativeVerdict("jump", origin+"_capture")}
+				}
+				chains[originStage] = append(chains[originStage], nativeJoin(
 					nativeMangle("meta priority set meta mark map @"+transport.name+"_token_channel", guardMeta("priority"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_channel"}}),
-					nativeVerdict("goto", channelStage)), nativeVerdict("drop", "")}
+					nativeVerdict("goto", channelStage)), nativeVerdict("drop", ""))
 				expectedEpoch := map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_epoch"}}
 				chains[channelStage] = []nativeScope{
 					nativeJoin(nativeMatch("ct mark 0", nativeCT("mark"), 0), nativeState("new"),
@@ -353,11 +377,23 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 			tokenText, token := transport.token()
 			record := checked + "_record"
 			chains[checked] = []nativeScope{nativeJoin(nativeMangle("ct mark set "+tokenText, nativeCT("mark"), token), nativeVerdict("goto", record)), nativeVerdict("drop", "")}
-			chains[record] = []nativeScope{nativeJoin(
+			parts := []nativeScope{}
+			if leg.reply {
+				chains[record] = []nativeScope{nativeVerdict("jump", transport.name+"_origin_restore")}
+				parts = append(parts,
+					nativeDynamicDelete(leg.name+"_origin_proof", keyText+" : meta priority", key, guardMeta("priority")),
+					nativeDynamicUpdate(leg.name+"_origin_proof", keyText+" : meta priority", key, guardMeta("priority")))
+			}
+			parts = append(parts,
 				nativeDynamicDelete(leg.name+"_proof", keyText+" : ct mark", key, nativeCT("mark")),
-				nativeDynamicUpdate(leg.name+"_proof", keyText+" : ct mark", key, nativeCT("mark")),
+				nativeDynamicUpdate(leg.name+"_proof", keyText+" : ct mark", key, nativeCT("mark")))
+			if leg.reply {
+				parts = append(parts, nativeMangle("meta priority set ct mark map @"+transport.name+"_token_channel", guardMeta("priority"), map[string]any{"map": map[string]any{"key": nativeCT("mark"), "data": "@" + transport.name + "_token_channel"}}))
+			}
+			parts = append(parts,
 				nativeMangle("ct mark set ct mark map @"+transport.name+"_token_epoch", nativeCT("mark"), map[string]any{"map": map[string]any{"key": nativeCT("mark"), "data": "@" + transport.name + "_token_epoch"}}),
-				nativeVerdict("return", "")), nativeVerdict("drop", "")}
+				nativeVerdict("return", ""))
+			chains[record] = append(chains[record], nativeJoin(parts...), nativeVerdict("drop", ""))
 		}
 	}
 	return chains
@@ -390,7 +426,7 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 		name     string
 		datatype any
 		mapType  string
-	}{{"_tokens", []string{"mark", "mark", "classid"}, "mark"}, {"_token_epoch", "mark", "mark"}, {"_token_context", "mark", "mark"}, {"_token_channel", "mark", "classid"}} {
+	}{{"_tokens", []string{"mark", "mark", "classid"}, "mark"}, {"_token_epoch", "mark", "mark"}, {"_token_context", "mark", "mark"}, {"_token_channel", "mark", "classid"}, {"_token_origin", "mark", "classid"}} {
 		name := transport.name + item.name
 		header := guardSetHeader("inet", name, item.datatype, 65536)
 		header["map"] = item.mapType
@@ -404,6 +440,12 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 		header := guardSetHeader("inet", name, map[string]any{"typeof": key}, 1024)
 		header["map"], header["flags"], header["timeout"] = "mark", []string{"timeout", "dynamic"}, 2
 		schema.maps[name] = header
+		if leg.reply {
+			name := leg.name + "_origin_proof"
+			header := guardSetHeader("inet", name, map[string]any{"typeof": key}, 1024)
+			header["map"], header["flags"], header["timeout"] = "classid", []string{"timeout", "dynamic"}, 2
+			schema.maps[name] = header
+		}
 	}
 	for name, rules := range transport.chains() {
 		schema.chains[name] = map[string]any{"family": "inet", "table": ownedTable, "name": name}

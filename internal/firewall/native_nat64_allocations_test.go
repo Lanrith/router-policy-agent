@@ -74,7 +74,7 @@ func TestNAT64AllocationPublicationRequiresCurrentOriginalReadiness(t *testing.T
 	var batch struct {
 		Operations []map[string]json.RawMessage `json:"nftables"`
 	}
-	expectedOperations := 19 + len(transport.sourceScopes)
+	expectedOperations := 23 + len(transport.sourceScopes)
 	for _, prefix := range transport.sourceScopes {
 		if slices.ContainsFunc(entries, func(entry policy.NAT64Allocation) bool { return prefix.Contains(entry.Source) }) {
 			expectedOperations++
@@ -84,7 +84,7 @@ func TestNAT64AllocationPublicationRequiresCurrentOriginalReadiness(t *testing.T
 		t.Fatal("NAT64 allocation publication is not one complete replacement", err)
 	}
 	for index, operation := range batch.Operations {
-		if index < 15+len(transport.sourceScopes) && operation["flush"] == nil || index >= 15+len(transport.sourceScopes) && operation["add"] == nil || len(operation) != 1 {
+		if index < 19+len(transport.sourceScopes) && operation["flush"] == nil || index >= 19+len(transport.sourceScopes) && operation["add"] == nil || len(operation) != 1 {
 			t.Fatal("NAT64 allocation publication is not flush-before-add")
 		}
 	}
@@ -256,7 +256,7 @@ func TestNAT64AllocationClearContainsNoPositiveState(t *testing.T) {
 	var batch struct {
 		Operations []map[string]json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(data, &batch); err != nil || len(batch.Operations) != 15+len(transport.sourceScopes) || bytes.Contains(data, []byte(`"add"`)) {
+	if err := json.Unmarshal(data, &batch); err != nil || len(batch.Operations) != 19+len(transport.sourceScopes) || bytes.Contains(data, []byte(`"add"`)) {
 		t.Fatal("NAT64 allocation revocation retained positive state", err)
 	}
 	if _, err := prepareNativeNAT64AllocationClear(t.Context(), &nativeNAT64Transport{}); err == nil {

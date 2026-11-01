@@ -53,6 +53,8 @@ EXPECTED_TESTS = [
     'TestKernelNamedNAT64PendingPreservesLogicalDestinationOrder',
     'TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes',
     'TestKernelNamedNAT64WireSourceEpochAndAllocationScopes',
+    'TestKernelNamedNAT64OriginCaptureAndConnectionBinding',
+    'TestKernelNamedNAT64OriginReturnRequiresBothProofs',
     'TestKernelNamedNAT64JoinedTAYGAConfiguration',
     'TestKernelNamedNAT64JoinedTAYGAOwner',
     'TestKernelNamedNAT64JoinedTAYGADirectory',

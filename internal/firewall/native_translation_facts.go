@@ -30,7 +30,7 @@ func nativeFactBits() []nativeFactBit {
 }
 
 // Conntrack label numbers identify bitmap positions, not numeric masks. Keep
-// the low 32 bits available for an independent NAT64 allocation identity.
+// the low 32 bits available for the independent NAT64 connection origin.
 func nativeFactLabel(bit uint, present bool) nativeScope {
 	op := "=="
 	if !present {
