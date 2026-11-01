@@ -191,6 +191,9 @@ func (access *nativeAccess) add(chain string, parts ...nativeScope) {
 }
 
 func (access *nativeAccess) compile(ctx context.Context, set *nativeRuleSet, managed, interfaces []string) error {
+	// Both forwarding hooks call this boundary even when every rule has only
+	// mixed-family scopes. An empty chain returns to the ordered default deny.
+	access.inet["native_denies"] = nil
 	for _, hook := range []string{"guard_forward", "permit_flow"} {
 		if hook == "guard_forward" {
 			access.add(hook, nativeMangle("meta mark set meta mark & "+guardMarkKeep, guardMeta("mark"),
