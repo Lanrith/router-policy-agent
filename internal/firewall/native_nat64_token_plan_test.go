@@ -167,6 +167,55 @@ func TestNAT64TokenDerivationRepresentsNoPermitAsTypedRevocation(t *testing.T) {
 	}
 }
 
+func TestNAT64EmptyAllocatorStartsSealedBeforeTheFirstClient(t *testing.T) {
+	t.Parallel()
+	b := nat64TransportFixture(t)
+	b.NetworkModel.Rules = []policy.NetworkRule{{Action: "allow", Authorization: "owner", Protocol: "any",
+		From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64")}},
+		To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}}}}
+	layout, err := newNativeNAT64AccessLayout(t.Context(), b, "nat64-internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := layout.native.nat64Transport
+	empty, err := transport.geometry.Capture(t.Context(), transport.component, nil, []policy.NAT64SourceMapping{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := policy.New(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := compiler.CompileOwnerConfiguration(t.Context(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, empty, configuration, nil, time.Now().UTC())
+	if err != nil {
+		t.Fatal("valid empty allocator prevents sealed startup", err)
+	}
+	data, err := tokens.publicationData(t.Context())
+	if err != nil || !tokens.clear || tokens.origin != nil || bytes.Contains(data, []byte(`"add"`)) {
+		t.Fatal("empty allocator acquired positive packet authority", err)
+	}
+	if _, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, empty, policy.OwnerConfiguration{}, nil, time.Now().UTC()); err == nil {
+		t.Fatal("empty allocator bypassed original configuration validation")
+	}
+	if _, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, nil, configuration, nil, time.Now().UTC()); err == nil {
+		t.Fatal("missing allocator was treated as a valid empty ledger")
+	}
+	first, err := transport.geometry.Capture(t.Context(), transport.component, empty, []policy.NAT64SourceMapping{
+		{Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, first, configuration, nil, time.Now().UTC())
+	if err != nil || active.clear || active.origin == nil || len(active.entries) == 0 {
+		t.Fatal("first real allocation could not derive its ordinary owner tokens", err)
+	}
+}
+
 func TestNAT64TokenDerivationDoesNotActivateReservedMapping(t *testing.T) {
 	t.Parallel()
 	fixture := newNAT64TokenPlanFixture(t, true)

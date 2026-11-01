@@ -61,9 +61,13 @@ func (origin *nativeNAT64TokenOrigin) deriveAt(ctx context.Context, utc time.Tim
 		return nil, errors.New("firewall: NAT64 token geometry differs from ordered access")
 	}
 	allocations, err := transport.geometry.ValidateLedger(ctx, transport.component, origin.ledger)
-	if err != nil || len(allocations) == 0 {
+	if err != nil {
 		return nil, errors.New("firewall: NAT64 token registry requires its original allocation ledger")
 	}
+	// A live translator can start before its first client. A validated empty
+	// ledger reaches the same clear-only publication as any no-permit plan;
+	// missing or foreign ledgers still reject above, and configuration below
+	// remains mandatory before deriving any state.
 	configuration, err := origin.configuration.Snapshot(ctx)
 	if err != nil || configuration.BaselineHash != access.baselineHash || configuration.Epoch == 0 || configuration.Epoch > policy.MaximumOwnershipEpoch {
 		return nil, errors.New("firewall: NAT64 token registry requires matching owner configuration")
