@@ -97,6 +97,9 @@ func (access *nativeAccess) compileNAT64(ctx context.Context) error {
 		if err := access.compileNAT64Requests(ctx, transport); err != nil {
 			return err
 		}
+		if err := access.compileNAT64WirePolicy(ctx, transport); err != nil {
+			return err
+		}
 		access.inet["native_n64_zone"] = append(access.inet["native_n64_zone"], transport.zoneRules()...)
 		if err := access.compileNAT64RawOrder(ctx, projected, transport); err != nil {
 			return err

@@ -106,12 +106,14 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 				grantGeometry := nativeJoin(leg.grantGeometry(true), leg.allocation(transport, true))
 				grant, delegated := nativeNAT64Grant(leg, true)
 				access.add(original, geometry, nativeVerdict("jump", leg.name+"_import"))
+				access.add(original, geometry, nativeVerdict("jump", transport.name+"_wire_order_original"))
 				access.add(original, geometry, nativeVerdict("jump", "native_translation_facts_capture"))
 				access.add(original, geometry, nativeNAT64CurrentConfiguration(false), nativeVerdict("accept", ""))
 				access.add(original, geometry, nativeNAT64CurrentSource(false), nativeVerdict("accept", ""))
 				if delegated {
 					access.add(original, grantGeometry, nativeNAT64CurrentDirectory(false, grant), nativeVerdict("accept", ""))
 				}
+				access.add(originalConfirm, geometry, nativeVerdict("jump", transport.name+"_wire_order_original"))
 				access.add(originalConfirm, geometry, nativeNAT64CurrentConfiguration(false), nativeVerdict("accept", ""))
 				access.add(originalConfirm, geometry, nativeNAT64CurrentSource(false), nativeVerdict("accept", ""))
 				if delegated {
@@ -123,11 +125,13 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 			wireGrantGeometry := nativeJoin(leg.grantGeometry(false), leg.allocation(transport, false))
 			wireGrant, wireDelegated := nativeNAT64Grant(leg, false)
 			access.add(reply, wireGeometry, nativeVerdict("jump", "native_translation_facts_restore"))
+			access.add(reply, wireGeometry, nativeVerdict("jump", transport.name+"_wire_order_reply"))
 			access.add(reply, wireGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(reply, wireGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if wireDelegated {
 				access.add(reply, wireGrantGeometry, nativeNAT64CurrentDirectory(true, wireGrant), nativeVerdict("accept", ""))
 			}
+			access.add(replyConfirm, wireGeometry, nativeVerdict("jump", transport.name+"_wire_order_reply"))
 			access.add(replyConfirm, wireGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(replyConfirm, wireGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if wireDelegated {

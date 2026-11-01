@@ -3,6 +3,7 @@ package firewall
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/netip"
@@ -73,11 +74,17 @@ func TestNAT64AllocationPublicationRequiresCurrentOriginalReadiness(t *testing.T
 	var batch struct {
 		Operations []map[string]json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(prepared.batch.data, &batch); err != nil || len(batch.Operations) != 13 {
+	expectedOperations := 13 + len(transport.sourceScopes)
+	for _, prefix := range transport.sourceScopes {
+		if slices.ContainsFunc(entries, func(entry policy.NAT64Allocation) bool { return prefix.Contains(entry.Source) }) {
+			expectedOperations++
+		}
+	}
+	if err := json.Unmarshal(prepared.batch.data, &batch); err != nil || len(batch.Operations) != expectedOperations {
 		t.Fatal("NAT64 allocation publication is not one complete replacement", err)
 	}
 	for index, operation := range batch.Operations {
-		if index < 9 && operation["flush"] == nil || index >= 9 && operation["add"] == nil || len(operation) != 1 {
+		if index < 9+len(transport.sourceScopes) && operation["flush"] == nil || index >= 9+len(transport.sourceScopes) && operation["add"] == nil || len(operation) != 1 {
 			t.Fatal("NAT64 allocation publication is not flush-before-add")
 		}
 	}
@@ -107,6 +114,80 @@ func TestNAT64AllocationPublicationRequiresCurrentOriginalReadiness(t *testing.T
 	}
 	if _, err := json.Marshal(prepared); err == nil {
 		t.Fatal("NAT64 allocation readiness became serializable")
+	}
+}
+
+func TestNAT64AllocationScopesRetainOriginalSourceAndDeadline(t *testing.T) {
+	t.Parallel()
+	transport, ledger, entries := nat64AllocationFixture(t)
+	proof := &testNAT64Readiness{transport: transport, entries: slices.Clone(entries), ready: true}
+	prepared, err := prepareNativeNAT64Allocations(t.Context(), transport, ledger, proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := prepared.elements(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transport.sourceScopes) == 0 {
+		t.Fatal("fixture lacks an immutable IPv6 source scope")
+	}
+	for index, prefix := range transport.sourceScopes {
+		wanted := map[string]bool{}
+		for _, entry := range entries {
+			if prefix.Contains(entry.Source) {
+				wanted[entry.Alias.String()] = true
+			}
+		}
+		values := rows[transport.sourceScopeName(index)]
+		if len(values) != len(wanted) {
+			t.Fatal("source scope does not match original allocation identities", prefix, values)
+		}
+		for _, raw := range values {
+			var element struct {
+				Value   string `json:"val"`
+				Timeout int    `json:"timeout"`
+			}
+			if err := decodeNested(raw, "elem", &element, []string{"val", "timeout"}); err != nil ||
+				!wanted[element.Value] || element.Timeout != prepared.timeout {
+				t.Fatal("source scope borrowed another identity or extended its deadline", string(raw), err)
+			}
+			delete(wanted, element.Value)
+		}
+	}
+	// An attacker-supplied digest cannot authorize a different source-scope
+	// row. The privileged boundary rederives the membership from the original
+	// ledger and live translator proof, independently of serialized bytes.
+	var batch struct {
+		Operations []map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal(prepared.batch.data, &batch); err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	for _, command := range batch.Operations {
+		var add struct {
+			Element struct {
+				Name string `json:"name"`
+			} `json:"element"`
+		}
+		if json.Unmarshal(command["add"], &add) != nil || add.Element.Name != transport.sourceScopeName(0) {
+			continue
+		}
+		replacement := bytes.Replace(command["add"], []byte("10.251.0.10"), []byte("10.251.0.11"), 1)
+		changed = !bytes.Equal(replacement, command["add"])
+		command["add"] = replacement
+	}
+	if !changed {
+		t.Fatal("fixture did not attempt a foreign source-scope membership")
+	}
+	prepared.batch.data, err = json.Marshal(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.digest = sha256.Sum256(prepared.batch.data)
+	if err := validateNAT64AllocationPreparation(t.Context(), prepared); err == nil {
+		t.Fatal("foreign scope membership escaped original-ledger validation")
 	}
 }
 
@@ -175,7 +256,7 @@ func TestNAT64AllocationClearContainsNoPositiveState(t *testing.T) {
 	var batch struct {
 		Operations []map[string]json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(data, &batch); err != nil || len(batch.Operations) != 9 || bytes.Contains(data, []byte(`"add"`)) {
+	if err := json.Unmarshal(data, &batch); err != nil || len(batch.Operations) != 9+len(transport.sourceScopes) || bytes.Contains(data, []byte(`"add"`)) {
 		t.Fatal("NAT64 allocation revocation retained positive state", err)
 	}
 	if _, err := prepareNativeNAT64AllocationClear(t.Context(), &nativeNAT64Transport{}); err == nil {

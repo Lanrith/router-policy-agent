@@ -19,18 +19,22 @@ import (
 // exact tuple correlation and a real TAYGA process. Configuration and dynamic
 // source ownership are separate modes so each can be revoked independently.
 func TestKernelNamedNAT64JoinedTAYGAConfiguration(t *testing.T) {
-	testKernelNamedNAT64JoinedTAYGA(t, "configuration")
+	testKernelNamedNAT64JoinedTAYGA(t, "configuration", false)
 }
 
 func TestKernelNamedNAT64JoinedTAYGAOwner(t *testing.T) {
-	testKernelNamedNAT64JoinedTAYGA(t, "owner")
+	testKernelNamedNAT64JoinedTAYGA(t, "owner", false)
 }
 
 func TestKernelNamedNAT64JoinedTAYGADirectory(t *testing.T) {
-	testKernelNamedNAT64JoinedTAYGA(t, "directory")
+	testKernelNamedNAT64JoinedTAYGA(t, "directory", false)
 }
 
-func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string) {
+func TestKernelNamedNAT64JoinedFinalInterfaceDenial(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "configuration", true)
+}
+
+func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalInterface bool) {
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
 	if authorization != "configuration" && authorization != "owner" && authorization != "directory" {
@@ -38,6 +42,11 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string) {
 	}
 	sourceOwned, directory := authorization != "configuration", authorization == "directory"
 	portBase := uint16(48000)
+	if finalInterface {
+		// These tests share one disposable netns. Link/table cleanup does not
+		// erase conntrack, so retain distinct tuples for the additional graph.
+		portBase = 44000
+	}
 	switch authorization {
 	case "owner":
 		portBase = 52000
@@ -46,13 +55,18 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	for _, link := range []struct {
+	links := []struct {
 		router, endpoint, routerMAC, endpointMAC, address string
 	}{
 		{"lan10", "peer0", "02:00:00:00:01:10", "02:00:00:00:00:10", "fdca:1a2b::1/64"},
 		{"lan11", "wrongpeer", "02:00:00:00:01:11", "02:00:00:00:00:11", "fdca:1a2b:1::1/64"},
 		{"wan", "wanpeer", "02:00:00:00:01:13", "02:00:00:00:00:13", "10.240.3.1/24"},
-	} {
+	}
+	if finalInterface {
+		links = append(links, struct{ router, endpoint, routerMAC, endpointMAC, address string }{
+			"lan13", "lanpeer", "02:00:00:00:01:14", "02:00:00:00:00:14", "10.240.4.1/24"})
+	}
+	for _, link := range links {
 		packetIP(ctx, t, "link", "add", link.router, "type", "veth", "peer", "name", link.endpoint)
 		selected := link.router
 		t.Cleanup(func() {
@@ -62,7 +76,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string) {
 		})
 		packetIP(ctx, t, "link", "set", link.router, "address", link.routerMAC)
 		packetIP(ctx, t, "link", "set", link.endpoint, "address", link.endpointMAC)
-		if link.router != "wan" {
+		if link.router != "wan" && link.router != "lan13" {
 			packetIP(ctx, t, "-6", "address", "add", link.address, "dev", link.router, "nodad")
 		} else {
 			packetIP(ctx, t, "address", "add", link.address, "dev", link.router)
@@ -73,6 +87,11 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string) {
 	packetIP(ctx, t, "neighbor", "add", "fdca:1a2b::10", "lladdr", "02:00:00:00:00:10", "dev", "lan10", "nud", "permanent")
 	for _, target := range []string{"10.240.3.10", "10.240.3.11"} {
 		packetIP(ctx, t, "neighbor", "add", target, "lladdr", "02:00:00:00:00:13", "dev", "wan", "nud", "permanent")
+	}
+	if finalInterface {
+		for _, address := range []string{"10.240.4.10", "10.240.4.11"} {
+			packetIP(ctx, t, "neighbor", "add", address, "lladdr", "02:00:00:00:00:14", "dev", "lan13", "nud", "permanent")
+		}
 	}
 	packetIP(ctx, t, "tuntap", "add", "dev", "nat64-internal", "mode", "tun")
 	t.Cleanup(func() {
@@ -87,7 +106,11 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string) {
 	packetIP(ctx, t, "-6", "route", "add", "fdca:1a2b:e064::/96", "dev", "nat64-internal")
 
 	b := nativeAccessBaseline(t)
-	b.Zones = b.Zones[:1]
+	if finalInterface {
+		b.Zones[1].Networks = sourceClassPrefixes("10.240.4.0/24")
+	} else {
+		b.Zones = b.Zones[:1]
+	}
 	b.NetworkModel.ManagedNetworks = []policy.Role{}
 	if sourceOwned {
 		b.NetworkModel.ManagedNetworks = []policy.Role{b.Zones[0].Role}
@@ -107,6 +130,16 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string) {
 		{Action: "allow", Authorization: allowAuthorization, Protocol: "any",
 			From: []policy.NetworkSelector{{Interface: "lan10", Addresses: []netip.Prefix{netip.MustParsePrefix("fdca:1a2b::/64")}}},
 			To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}}},
+	}
+	if finalInterface {
+		b.NetworkModel.Rules = append([]policy.NetworkRule{
+			{Action: "deny", Authorization: "inherit", Protocol: "any",
+				From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64"), MAC: "02:00:00:00:00:10"}},
+				To:   []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.4.10/32")}}},
+			{Action: "deny", Authorization: "inherit", Protocol: "any",
+				From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::11/128")}},
+				To:   []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.4.11/32")}}},
+		}, b.NetworkModel.Rules...)
 	}
 	layout, err := newNativeNAT64AccessLayout(ctx, b, "nat64-internal")
 	if err != nil {
@@ -324,6 +357,20 @@ insert rule inet `+ownedTable+` native_translation_facts_reply_kind counter name
 	client, wrong, internet := packetSocket(t, "peer0"), packetSocket(t, "wrongpeer"), packetSocket(t, "wanpeer")
 	source, alias := entries[0].Source, entries[0].Alias
 	target, encoded := netip.MustParseAddr("10.240.3.10"), netip.MustParseAddr("fdca:1a2b:e064::af0:30a")
+	if finalInterface {
+		lan := packetSocket(t, "lanpeer")
+		request := packetDatagram{source: source, destination: netip.MustParseAddr("fdca:1a2b:e064::af0:40a"),
+			sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
+			sourcePort: portBase - 1, destinationPort: 6061, payload: "denied-final-LAN-through-NAT64"}
+		sendPacket(ctx, t, client, packetFrame(t, request))
+		rejectNATPayload(ctx, t, lan, request.payload)
+		request.destination, request.sourcePort, request.payload = netip.MustParseAddr("fdca:1a2b:e064::af0:40b"), portBase-2, "allowed-final-LAN-with-other-source-deny"
+		sendPacket(ctx, t, client, packetFrame(t, request))
+		wire := request
+		wire.source, wire.destination = alias, netip.MustParseAddr("10.240.4.11")
+		wire.sourceMAC, wire.destinationMAC = "02:00:00:00:01:14", "02:00:00:00:00:14"
+		receivePacket(ctx, t, lan, packetFrame(t, wire), true, 61)
+	}
 	denied := packetDatagram{source: source, destination: netip.MustParseAddr("fdca:1a2b:e064::af0:30b"), sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
 		sourcePort: portBase, destinationPort: 6061, payload: "projected-deny-" + authorization}
 	sendPacket(ctx, t, client, packetFrame(t, denied))
@@ -418,11 +465,11 @@ insert rule inet `+ownedTable+` native_translation_facts_reply_kind counter name
 		rejectNATPayload(ctx, t, internet, withdrawnOwner.payload)
 	}
 
-	clear, err := prepareNativeNAT64TokenClear(ctx, transport)
+	tokenRevocation, err := prepareNativeNAT64TokenClear(ctx, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
-	applyNAT64Publication(ctx, t, publisher, commandInput{op: applyNAT64Tokens, nat64Tokens: clear})
+	applyNAT64Publication(ctx, t, publisher, commandInput{op: applyNAT64Tokens, nat64Tokens: tokenRevocation})
 	withdrawn := denied
 	withdrawn.destination, withdrawn.sourcePort, withdrawn.payload = encoded, portBase+16, fmt.Sprintf("withdrawn-%d", time.Now().UnixNano())
 	sendPacket(ctx, t, client, packetFrame(t, withdrawn))

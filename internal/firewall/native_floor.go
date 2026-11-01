@@ -22,6 +22,18 @@ func (access *nativeAccess) compileFloor(ctx context.Context, b policy.Baseline,
 			attachments[iface] = append(attachments[iface], zone.Networks...)
 		}
 	}
+	// A selected translator is an exceptional source attachment, not a LAN.
+	// Keep its source geometry bounded here; allocation, tuple, epoch and
+	// authorization checks remain mandatory in its separately compiled legs.
+	// Its address space is router-owned for WAN anti-spoofing too.
+	for _, component := range b.NAT64 {
+		if !slices.Contains(interfaces, component.ID) || component.SourcePool == nil {
+			continue
+		}
+		prefixes := []netip.Prefix{*component.SourcePool, component.Prefix}
+		attachments[component.ID] = append(attachments[component.ID], prefixes...)
+		owned = append(owned, prefixes...)
+	}
 	for _, service := range b.NetworkModel.CoreServices {
 		for _, address := range service.Addresses {
 			prefix := netip.PrefixFrom(address, address.BitLen())

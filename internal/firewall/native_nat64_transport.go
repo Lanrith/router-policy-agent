@@ -22,6 +22,7 @@ type nativeNAT64Transport struct {
 	component, name string
 	uplink          string
 	destinations    []string
+	sourceScopes    []netip.Prefix
 	prefix, pool    netip.Prefix
 	mappings        []policy.NAT64SourceMapping
 	sourceNetworks  map[string][]netip.Prefix
@@ -95,6 +96,25 @@ func newNativeNAT64Transport(ctx context.Context, baseline policy.Baseline, comp
 		}
 		slices.Sort(transport.destinations)
 		transport.destinations = slices.Compact(transport.destinations)
+		for _, rule := range b.NetworkModel.Rules {
+			for _, source := range rule.From {
+				for _, prefix := range source.Addresses {
+					if prefix.Addr().Is6() {
+						transport.sourceScopes = append(transport.sourceScopes, prefix.Masked())
+					}
+				}
+			}
+		}
+		slices.SortFunc(transport.sourceScopes, func(first, second netip.Prefix) int {
+			if compared := first.Addr().Compare(second.Addr()); compared != 0 {
+				return compared
+			}
+			return first.Bits() - second.Bits()
+		})
+		transport.sourceScopes = slices.Compact(transport.sourceScopes)
+		if len(transport.sourceScopes) > 4096 {
+			return nil, errors.New("firewall: NAT64 source scope inventory exceeds capacity")
+		}
 		for _, protocol := range []string{"tcp", "udp", "icmp"} {
 			for _, reply := range []bool{false, true} {
 				direction := "forward"
@@ -163,6 +183,9 @@ func (transport *nativeNAT64Transport) definitions() []string {
 		fmt.Sprintf("map %s_token_context { type mark : mark; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_token_channel { type mark : classid; size 65536; }", transport.name),
 		fmt.Sprintf("set %s_token_epoch_pairs { type mark . mark; size 65536; }", transport.name),
+	}
+	for index := range transport.sourceScopes {
+		result = append(result, fmt.Sprintf("set %s { type ipv4_addr; flags timeout; timeout 90s; size 65533; }", transport.sourceScopeName(index)))
 	}
 	for _, leg := range transport.legs {
 		key, _ := leg.tuple(false)
@@ -343,6 +366,12 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 	sources := guardSetHeader("inet", transport.name+"_sources", map[string]any{"typeof": map[string]any{"concat": []any{nativeCT("zone"), guardPayload("ip6", "saddr")}}}, 65533)
 	sources["flags"], sources["timeout"] = []string{"timeout"}, 90
 	schema.sets[transport.name+"_sources"] = sources
+	for index := range transport.sourceScopes {
+		name := transport.sourceScopeName(index)
+		header := guardSetHeader("inet", name, "ipv4_addr", 65533)
+		header["flags"], header["timeout"] = []string{"timeout"}, 90
+		schema.sets[name] = header
+	}
 	for _, item := range []struct {
 		name     string
 		datatype any
@@ -367,4 +396,8 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 		schema.rules[name] = nativeRulesExpressions(rules)
 	}
 	return schema
+}
+
+func (transport *nativeNAT64Transport) sourceScopeName(index int) string {
+	return fmt.Sprintf("%s_source_scope_%d", transport.name, index)
 }
