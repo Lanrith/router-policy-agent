@@ -81,6 +81,7 @@ func setupNAT64PendingLinks(ctx context.Context, t *testing.T) {
 			packetIP(cleanup, t, "link", "delete", name)
 		})
 	}
+	packetIP(ctx, t, "link", "set", "nat64-internal", "address", "02:00:00:00:01:64")
 	packetIP(ctx, t, "link", "set", "n64peer", "address", "02:00:00:00:00:64")
 	for _, name := range []string{"wan", "nat64-internal", "n64peer"} {
 		packetIP(ctx, t, "link", "set", name, "up")
