@@ -13,10 +13,11 @@ spec.loader.exec_module(runner)
 class QualificationTests(unittest.TestCase):
     def test_default_batches_retain_the_whole_previous_suite_and_new_owner(self):
         batches = runner.vm_batches(runner.EXPECTED_TESTS)
-        self.assertEqual([13, 5, 10, 11], [len(batch) for batch in batches])
+        self.assertEqual([14, 5, 10, 11], [len(batch) for batch in batches])
         executed = [name for batch in batches for name in batch]
         self.assertEqual(runner.EXPECTED_TESTS, executed)
         self.assertEqual(len(executed), len(set(executed)))
+        self.assertIn("TestKernelNamedLocalNeighborControl", batches[0])
         translators = batches[2]
         self.assertIn('TestKernelNamedUplinkNATRetainsSourceAndGrants', translators)
         self.assertIn('TestKernelNamedNAT46TupleTransport', translators)

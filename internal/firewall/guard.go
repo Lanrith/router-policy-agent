@@ -154,6 +154,9 @@ func (layout *guardLayout) program(ctx context.Context) ([]byte, error) {
 	}
 	if layout.ownership {
 		lines = append(lines, ownershipSourceRules()...)
+		lines = append(lines, "chain local_output { type filter hook output priority 200; policy accept;")
+		lines = append(lines, nativeRulesText(ownershipLocalOutput())...)
+		lines = append(lines, "}")
 	}
 	lines = append(lines, "}", "table netdev "+ownedTable+" {",
 		fmt.Sprintf("set %s { type ether_addr; size %d; }", cohortSet, maximumCohortSize))
@@ -179,6 +182,7 @@ func (layout *guardLayout) program(ctx context.Context) ([]byte, error) {
 			index, name,
 		))
 		if layout.ownership && (name != "nat46" || layout.native == nil || layout.native.nat46Transport == nil) {
+			lines = append(lines, nativeRulesText(ownershipLocalControl())...)
 			if layout.native != nil {
 				lines = append(lines, nativeRulesText(layout.native.corePhysicalEgress(name))...)
 			}

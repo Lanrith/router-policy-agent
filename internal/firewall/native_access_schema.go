@@ -120,7 +120,7 @@ func nativePriorityScopes(restore bool) []nativeScope {
 
 func (access *nativeAccess) schema(schema *guardTableSchema, family string, interfaces []string) {
 	for name := range schema.chains {
-		if name != "validate_source" && name != "validate_target" {
+		if name != "validate_source" && name != "validate_target" && name != "local_output" {
 			delete(schema.chains, name)
 			delete(schema.rules, name)
 		}
@@ -151,7 +151,8 @@ func (access *nativeAccess) schema(schema *guardTableSchema, family string, inte
 		name := fmt.Sprintf("guard_egress_%d", index)
 		schema.chains[name] = map[string]any{"family": family, "table": ownedTable, "name": name, "dev": device,
 			"type": "filter", "hook": "egress", "prio": 0, "policy": "accept"}
-		schema.rules[name] = append(nativeRulesExpressions(access.corePhysicalEgress(device)), nativeVerdict("jump", "validate_target").expressions)
+		schema.rules[name] = append(nativeRulesExpressions(ownershipLocalControl()), nativeRulesExpressions(access.corePhysicalEgress(device))...)
+		schema.rules[name] = append(schema.rules[name], nativeVerdict("jump", "validate_target").expressions)
 		if device == "nat46" && access.nat46Transport != nil {
 			schema.rules[name] = nil
 		}

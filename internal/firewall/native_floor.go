@@ -89,6 +89,7 @@ func (access *nativeAccess) compileFloor(ctx context.Context, b policy.Baseline,
 	// checks; this also closes interfaces with no installed netdev hook.
 	// nft lists interface indices as interface-name strings, including "0".
 	access.add("native_egress_floor", nativeMatch("meta iif 0", guardMeta("iif"), "0"), nativeVerdict("return", ""))
+	access.add("native_egress_floor", nativeMark(0xff000000, localOutputTag), nativeVerdict("return", ""))
 	for _, iface := range interfaces {
 		access.add("native_egress_floor", nativeMatch(fmt.Sprintf("oifname %q", iface), guardMeta("oifname"), iface), nativeVerdict("goto", "native_egress_kind"))
 	}

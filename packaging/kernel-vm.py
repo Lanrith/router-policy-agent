@@ -23,6 +23,7 @@ EXPECTED_TESTS = [
     'TestKernelGuardClassificationRestoreAndSeal', 'TestKernelZeroGrantHistoryClosesReusedNativeAddresses',
     'TestKernelControllerTAYGARoundTrip', 'TestKernelControllerTAYGAICMP', 'TestKernelDeviceTAYGACallbacks',
     'TestKernelNamedOwnershipRefreshAndExpiry',
+    'TestKernelNamedLocalNeighborControl',
     'TestKernelNamedOwnershipUsesWriterAndFloorFences',
     'TestKernelNamedOwnershipEpochRejectsOldConnections',
     'TestKernelNamedNativePredicatesRetainEveryField',
@@ -180,13 +181,13 @@ def check_console(console, tests, status):
 
 
 def vm_batches(tests):
-    # Keep the original thirteen-fixture group intact. Run the native core
-    # separately, and keep uplink-NAT inspection with the translator fixtures
+    # Keep the original guard group plus local-control regression intact.
+    # Run the native core separately, and keep uplink-NAT inspection with the translator fixtures
     # so their table cleanup remains covered. All VMs use the same timeout,
     # writer fences, binary and source inventory.
     # The aggregate can pass only after every selected fixture passes once.
     if tests == EXPECTED_TESTS:
-        return [tests[:13], tests[13:18], tests[18:28], tests[28:]]
+        return [tests[:14], tests[14:19], tests[19:29], tests[29:]]
     return [tests]
 
 

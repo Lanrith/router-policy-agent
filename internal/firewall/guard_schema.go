@@ -157,6 +157,8 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 		if layout.ownership {
 			schema.chains["validate_source"] = map[string]any{"family": family, "table": ownedTable, "name": "validate_source"}
 			schema.rules["validate_source"] = ownershipExpressions(true)
+			schema.chains["local_output"] = map[string]any{"family": family, "table": ownedTable, "name": "local_output", "type": "filter", "hook": "output", "prio": 200, "policy": "accept"}
+			schema.rules["local_output"] = nativeRulesExpressions(ownershipLocalOutput())
 			jump := []any{map[string]any{"jump": map[string]any{"target": "validate_source"}}}
 			schema.rules["guard_forward"] = append(schema.rules["guard_forward"][:1], append([][]any{jump}, schema.rules["guard_forward"][1:]...)...)
 			schema.rules["permit_flow"] = append([][]any{jump}, schema.rules["permit_flow"]...)
@@ -175,6 +177,7 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 		}
 		rules := make([][]any, 0, len(grantSets)+3)
 		if layout.ownership {
+			rules = append(rules, nativeRulesExpressions(ownershipLocalControl())...)
 			rules = append(rules, []any{map[string]any{"jump": map[string]any{"target": "validate_target"}}})
 		}
 		rules = append(rules, layout.controllerEgressExpressions(device)...)

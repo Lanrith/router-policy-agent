@@ -314,6 +314,18 @@ connection kind. Losing both the mark and saved priority fails there. Local
 router output remains subject to its separate root firewall; the forwarding
 guard preserves neighbor discovery and other local control traffic.
 
+The physical guard returns locally generated Ethernet/IPv4 ARP requests and
+replies before the managed-MAC ownership check. It checks hardware/protocol
+types and address lengths. Local IPv6 router/neighbor solicitations and
+advertisements require hop limit 255 and ICMP code zero. ARP requires incoming
+interface zero. IPv6 control requires that identity or
+a local-output token set by the image-owned output hook and cleared by forwarding
+admission. Kernel replies can report their output device as the incoming
+identity by postrouting. The token grants no forwarding permission. These
+control packets remain available during ownership expiry or a directory outage.
+They set no permission mark. Redirects, echo and application traffic receive no
+exception, and the separate router input/output firewall still applies.
+
 The physical-floor fixture tests original and reply address substitutions in
 both families with TCP/UDP, router and wrong-network source changes, protected
 destinations, loss of both metadata fields, unknown egress and unused service
