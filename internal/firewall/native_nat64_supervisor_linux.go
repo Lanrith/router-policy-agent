@@ -53,6 +53,8 @@ type nativeNAT64RuntimeStatus struct {
 	StartTicks          string  `json:"start_ticks"`
 	Monotonic           float64 `json:"monotonic"`
 	ConfigurationSHA256 string  `json:"configuration_sha256"`
+	ExecutableDevice    uint64  `json:"executable_device"`
+	ExecutableInode     uint64  `json:"executable_inode"`
 }
 
 type runtimeNAT64Supervisor struct {
@@ -288,13 +290,13 @@ func readNAT64RuntimeFile(ctx context.Context, directory, name string, maximum i
 }
 
 func decodeNAT64RuntimeStatus(ctx context.Context, data []byte) (nativeNAT64RuntimeStatus, error) {
-	keys := []string{"pid", "start_ticks", "monotonic", "configuration_sha256"}
+	keys := []string{"pid", "start_ticks", "monotonic", "configuration_sha256", "executable_device", "executable_inode"}
 	if ctx == nil || len(data) == 0 || len(data) > maximumNAT64RuntimeStatus || strictjson.Object(data, keys, nil, maximumNAT64RuntimeStatus) != nil {
 		return nativeNAT64RuntimeStatus{}, errors.New("firewall: invalid NAT64 runtime status")
 	}
 	var status nativeNAT64RuntimeStatus
 	if err := strictjson.Decode(data, &status, maximumNAT64RuntimeStatus); err != nil || status.PID <= 1 || status.StartTicks == "" ||
-		status.Monotonic < 0 || !generationHash(status.ConfigurationSHA256) {
+		status.Monotonic < 0 || !generationHash(status.ConfigurationSHA256) || status.ExecutableDevice == 0 || status.ExecutableInode == 0 {
 		return nativeNAT64RuntimeStatus{}, errors.New("firewall: invalid NAT64 runtime status")
 	}
 	uptime, err := os.ReadFile("/proc/uptime")
@@ -377,9 +379,6 @@ func verifyNAT64Process(ctx context.Context, component nativeNAT64RuntimeCompone
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := syscall.Kill(status.PID, 0); err != nil {
-		return errors.New("firewall: supervised NAT64 process stopped")
-	}
 	root := filepath.Join("/proc", strconv.Itoa(status.PID))
 	process, err := os.OpenRoot(root)
 	if err != nil {
@@ -395,32 +394,77 @@ func verifyNAT64Process(ctx context.Context, component nativeNAT64RuntimeCompone
 	if len(parts) == 2 {
 		fields = strings.Fields(string(parts[1]))
 	}
-	if len(fields) <= 19 || fields[19] != status.StartTicks {
+	if len(fields) <= 19 || fields[0] == "Z" || fields[0] == "X" || fields[19] != status.StartTicks {
 		return errors.New("firewall: supervised NAT64 process identity changed")
 	}
 	processStatus, err := process.ReadFile("status")
 	if err != nil {
 		return errors.New("firewall: supervised NAT64 process status unavailable")
 	}
-	values := map[string]string{}
-	for _, line := range strings.Split(string(processStatus), "\n") {
-		key, value, found := strings.Cut(line, ":")
-		if found {
-			values[key] = strings.TrimSpace(value)
-		}
-	}
-	uid := strconv.FormatUint(uint64(component.UID), 10)
-	if uidFields := strings.Fields(values["Uid"]); len(uidFields) != 4 || slices.ContainsFunc(uidFields, func(value string) bool { return value != uid }) ||
-		strings.TrimLeft(values["CapEff"], "0") != "" {
-		return errors.New("firewall: supervised NAT64 process privileges changed")
+	if err := checkNAT64ProcessPrivileges(processStatus, component.UID); err != nil {
+		return err
 	}
 	commandLine, err := process.ReadFile("cmdline")
 	expected := []byte(component.Executable + "\x00--nodetach\x00--config\x00" + component.ConfigurationFile + "\x00")
 	if err != nil || !bytes.Equal(commandLine, expected) {
 		return errors.New("firewall: supervised NAT64 process command changed")
 	}
-	executable, err := process.Readlink("exe")
-	if err != nil || executable != component.Executable {
+	if err := verifyNAT64ImageExecutable(ctx, component.Executable, status); err != nil {
+		return err
+	}
+	statData, err = process.ReadFile("stat")
+	parts = bytes.SplitN(statData, []byte(") "), 2)
+	if err != nil || len(parts) != 2 {
+		return errors.New("firewall: supervised NAT64 process stopped during verification")
+	}
+	fields = strings.Fields(string(parts[1]))
+	if len(fields) <= 19 || fields[0] == "Z" || fields[0] == "X" || fields[19] != status.StartTicks {
+		return errors.New("firewall: supervised NAT64 process changed during verification")
+	}
+	return ctx.Err()
+}
+
+func checkNAT64ProcessPrivileges(data []byte, expectedUID uint32) error {
+	values := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, found := strings.Cut(line, ":")
+		if found {
+			values[key] = strings.TrimSpace(value)
+		}
+	}
+	uid := strconv.FormatUint(uint64(expectedUID), 10)
+	if uidFields := strings.Fields(values["Uid"]); len(uidFields) != 4 || slices.ContainsFunc(uidFields, func(value string) bool { return value != uid }) {
+		return errors.New("firewall: supervised NAT64 process privileges changed")
+	}
+	for _, field := range []string{"CapEff", "CapPrm", "CapInh", "CapAmb"} {
+		capabilities, err := strconv.ParseUint(values[field], 16, 64)
+		if err != nil || capabilities != 0 {
+			return errors.New("firewall: supervised NAT64 process privileges changed")
+		}
+	}
+	return nil
+}
+
+func verifyNAT64ImageExecutable(ctx context.Context, path string, status nativeNAT64RuntimeStatus) error {
+	// The root supervisor attests its child through a bounded same-UID worker.
+	// Reading a different UID's /proc/PID/exe here would need ptrace authority;
+	// signal-zero would need CAP_KILL. Enforcement retains CAP_NET_ADMIN only.
+	// Independently pin the image-owned ELF and compare the protected, fresh
+	// witness while retaining the live kernel UID, birth and command checks.
+	executableRoot, err := hostfs.OpenDirectory(ctx, hostfs.DirectoryOptions{Path: filepath.Dir(path), OwnerUID: 0})
+	if err != nil {
+		return errors.New("firewall: supervised NAT64 executable directory unavailable")
+	}
+	executable, err := hostfs.OpenExecutable(ctx, executableRoot, filepath.Base(path), 0)
+	if err != nil {
+		return profileFailure("supervised NAT64 executable unavailable", errors.Join(err, executableRoot.Close()))
+	}
+	info, inspectErr := executable.Stat()
+	if err := errors.Join(inspectErr, executable.Close(), executableRoot.Close(), ctx.Err()); err != nil {
+		return errors.New("firewall: supervised NAT64 executable unavailable")
+	}
+	identity, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || identity.Dev != status.ExecutableDevice || identity.Ino != status.ExecutableInode {
 		return errors.New("firewall: supervised NAT64 executable changed")
 	}
 	return ctx.Err()

@@ -6,12 +6,80 @@ import (
 	"encoding/json"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
+
+func TestNAT64ProcessPrivilegesRejectEveryCapabilityNamespace(t *testing.T) {
+	t.Parallel()
+	valid := "Uid:\t65534\t65534\t65534\t65534\nCapEff:\t0000000000000000\nCapPrm:\t0000000000000000\nCapInh:\t0000000000000000\nCapAmb:\t0000000000000000\n"
+	if err := checkNAT64ProcessPrivileges([]byte(valid), 65534); err != nil {
+		t.Fatal("capability-empty process rejected", err)
+	}
+	for _, field := range []string{"CapEff", "CapPrm", "CapInh", "CapAmb"} {
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			for _, replacement := range []string{field + ":\t0000000000000001", field + ":\tnot-hex", "Missing:"} {
+				changed := strings.Replace(valid, field+":\t0000000000000000", replacement, 1)
+				if err := checkNAT64ProcessPrivileges([]byte(changed), 65534); err == nil {
+					t.Fatal("changed or missing process authority accepted", field)
+				}
+			}
+		})
+	}
+	for _, uid := range []uint32{0, 65533} {
+		if err := checkNAT64ProcessPrivileges([]byte(valid), uid); err == nil {
+			t.Fatal("another UID borrowed the process witness", uid)
+		}
+	}
+}
+
+func TestNAT64ImageWitnessPinsOnlyTheRootOwnedELF(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() != 0 {
+		t.Skip("root-owned executable fixture runs in the disposable root job")
+	}
+	path := filepath.Join(t.TempDir(), "translator")
+	// #nosec G306 -- A synthetic four-byte ELF header, never executed.
+	if err := os.WriteFile(path, []byte{0x7f, 'E', 'L', 'F'}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("executable fixture has no kernel identity")
+	}
+	witness := nativeNAT64RuntimeStatus{ExecutableDevice: identity.Dev, ExecutableInode: identity.Ino}
+	if err := verifyNAT64ImageExecutable(t.Context(), path, witness); err != nil {
+		t.Fatal("matching image ELF witness rejected", err)
+	}
+	witness.ExecutableInode++
+	if err := verifyNAT64ImageExecutable(t.Context(), path, witness); err == nil {
+		t.Fatal("a different executable inode borrowed the witness")
+	}
+	witness.ExecutableInode--
+	alias := path + "-link"
+	if err := os.Symlink(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyNAT64ImageExecutable(t.Context(), alias, witness); err == nil {
+		t.Fatal("symlink used as image executable authority")
+	}
+	if err := os.Chmod(path, 0o777); err != nil { // #nosec G302 -- Deliberately unsafe negative fixture.
+		t.Fatal(err)
+	}
+	if err := verifyNAT64ImageExecutable(t.Context(), path, witness); err == nil {
+		t.Fatal("untrusted-writable executable retained its witness")
+	}
+}
 
 func nat64RuntimeManifestFixture(t *testing.T, transports []*nativeNAT64Transport) nativeNAT64RuntimeManifest {
 	t.Helper()
@@ -177,7 +245,7 @@ func TestNAT64RuntimeStatusRequiresFreshKernelMonotonicEvidence(t *testing.T) {
 	}
 	configuration := []byte("synthetic-runtime-configuration")
 	sum := sha256.Sum256(configuration)
-	valid, err := json.Marshal(nativeNAT64RuntimeStatus{PID: os.Getpid(), StartTicks: "1", Monotonic: now, ConfigurationSHA256: hex.EncodeToString(sum[:])})
+	valid, err := json.Marshal(nativeNAT64RuntimeStatus{PID: os.Getpid(), StartTicks: "1", Monotonic: now, ConfigurationSHA256: hex.EncodeToString(sum[:]), ExecutableDevice: 1, ExecutableInode: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +255,8 @@ func TestNAT64RuntimeStatusRequiresFreshKernelMonotonicEvidence(t *testing.T) {
 	for _, changed := range [][]byte{
 		[]byte(strings.Replace(string(valid), `"pid":`+strconv.Itoa(os.Getpid()), `"pid":1`, 1)),
 		[]byte(strings.Replace(string(valid), `"monotonic":`+strconv.FormatFloat(now, 'g', -1, 64), `"monotonic":0`, 1)),
+		[]byte(strings.Replace(string(valid), `"executable_device":1`, `"executable_device":0`, 1)),
+		[]byte(strings.Replace(string(valid), `,"executable_inode":2`, ``, 1)),
 		[]byte(strings.Replace(string(valid), `"configuration_sha256":`, `"yaml":"owner.yaml","configuration_sha256":`, 1)),
 	} {
 		if _, err := decodeNAT64RuntimeStatus(t.Context(), changed); err == nil {

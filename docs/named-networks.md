@@ -120,6 +120,23 @@ either epoch rejects its own old connections. The separate native owner
 component below selects and rechecks these epochs; complete router integration
 remains gated.
 
+For selected NAT64 components, the root-owned runtime witness requires
+`pid`, `start_ticks`, `monotonic`, `configuration_sha256`, `executable_device`
+and `executable_inode`. The timestamp uses kernel boot time, including suspend;
+the witness expires after four seconds. The translator supervisor obtains the
+executable identity through a two-second, non-dumpable worker running as the
+translator UID. Only the supervisor can publish this file. A stalled worker is
+terminated and reaped without publishing a witness.
+
+The enforcing helper checks that witness against the image-owned, single-link
+ELF and independently rereads the live process UID, start ticks, exact command
+and empty effective/permitted/inheritable/ambient capabilities. It rejects
+changed files, missing fields, stale evidence and dead or replaced processes.
+It needs no signal or ptrace authority: its capability ceiling remains
+`CAP_NET_ADMIN`. The witness does not grant forwarding permission; allocation,
+ordered policy, current ownership, directory grants and translated tuple checks
+remain separate requirements.
+
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection
 epoch; it cannot assign the latest epoch to an old connection. Inspection checks
