@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
@@ -30,6 +31,7 @@ func (b *guardedBackend) refreshOwnership(ctx context.Context, evidence policy.O
 	}()
 	var post []byte
 	var publication *nativeSourcePublication
+	unchanged := false
 	if err := b.options.generation.with(ctx, b.options.expected, func(bounded context.Context) error {
 		p := b.options.executor
 		if err := p.acquire(bounded); err != nil {
@@ -39,6 +41,16 @@ func (b *guardedBackend) refreshOwnership(ctx context.Context, evidence policy.O
 		observation, err := p.observeProfile(bounded, b.options.profile)
 		if err != nil {
 			return err
+		}
+		if b.options.profile.layout.native != nil && b.pendingNativeOwnership == nil {
+			unchanged, err = reuseNativeSource(bounded, b.nativeOwnership, evidence, observation.guards.sourceEpoch, b.options.clock(), time.Now())
+			if err != nil {
+				return err
+			}
+			if unchanged {
+				publication = b.nativeOwnership
+				return nil
+			}
 		}
 		prepare := b.options.profile.renderer.prepareOwnership
 		if b.options.profile.layout.native != nil {
@@ -85,6 +97,14 @@ func (b *guardedBackend) refreshOwnership(ctx context.Context, evidence policy.O
 		return nil
 	}); err != nil {
 		return err
+	}
+	if unchanged {
+		// NAT64 allocation observations are independent of binding collection.
+		// They may still change, but can only use this original source receipt.
+		if len(b.options.profile.layout.native.selectedNAT64Transports()) != 0 && b.hasNAT64Origins() {
+			return b.refreshNAT64Tokens(ctx, publication)
+		}
+		return ctx.Err()
 	}
 	// The listing was captured under the full writer/executor fence. Parsing
 	// that immutable snapshot does not need to consume the writer's deadline.

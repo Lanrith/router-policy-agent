@@ -38,9 +38,11 @@ func ownershipLocalControl() []nativeScope {
 // in postrouting, so an interface-zero test alone is insufficient.
 const localOutputTag = uint64(0xbc000000)
 
+// Existing reserved packet kinds retain their own exact validation path.
 func ownershipLocalOutput() []nativeScope {
-	return []nativeScope{
+	return []nativeScope{nativeJoin(
+		nativeMark(0xff000000, 0),
 		nativeMangle("meta mark set meta mark & 0x00ffffff", guardMeta("mark"), guardBinary("&", guardMeta("mark"), uint64(0x00ffffff))),
 		nativeMangle("meta mark set meta mark | 0xbc000000", guardMeta("mark"), guardBinary("|", guardMeta("mark"), localOutputTag)),
-	}
+	)}
 }

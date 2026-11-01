@@ -70,6 +70,13 @@ MAC and native address. Its kernel timeout stays below the original producer
 deadline and the helper's elapsed-age limit. Diagnostic snapshots and saved
 classification cannot supply positive ownership evidence.
 
+Repeated reads of the same producer generation keep the original opaque source
+publication and its installed deadlines. They neither rewrite the parent timeout
+nor withdraw current NAT grant projections. Reuse requires identical association,
+addresses and deadlines, a matching inspected epoch and an unexpired original
+receipt. Changed evidence still follows the fenced refresh/revocation path; a
+source update never restores an expired or previously withdrawn directory grant.
+
 Early and late forwarding checks reject a classified source without current
 ownership. Final egress checks require current ownership for a classified
 destination MAC too. A new association or ownership episode revokes the old
