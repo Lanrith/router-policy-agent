@@ -167,6 +167,15 @@ label contents or confirmed connection without an origin is rejected. These
 checks preserve connection provenance independently of destination permission;
 the current ordered policy, ownership and grant checks still apply.
 
+Export carries its temporary token in packet priority and never writes the
+connection marker. It preserves the packet's QoS byte and saved priority.
+After exporting the independent origin, an IPv4 reply recovers its authorization
+priority from immutable connection labels before looking up its token. Token
+and allocation publication include the typed export-priority conversion map.
+The kernel return fixture observes the unchanged marker during export and the
+restored packet metadata before physical enforcement. Missing and substituted
+proofs must be rejected within their original two-second lifetime.
+
 The translator attachment's source floor permits only its IPv4 pool and IPv6
 translation prefix. WAN source validation rejects both ranges. These checks
 grant no access independently of allocation, policy, epochs and tuple proofs.

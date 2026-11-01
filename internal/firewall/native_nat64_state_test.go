@@ -53,7 +53,7 @@ func TestAggregateNAT64StateIsOneExactKernelTransaction(t *testing.T) {
 	var transaction struct {
 		Operations []json.RawMessage `json:"nftables"`
 	}
-	expectedOperations := 34 * len(transports)
+	expectedOperations := 36 * len(transports)
 	for _, transport := range transports {
 		expectedOperations += len(transport.sourceScopes)
 	}

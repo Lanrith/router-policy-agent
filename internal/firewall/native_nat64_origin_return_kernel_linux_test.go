@@ -5,6 +5,7 @@ package firewall
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -103,6 +104,26 @@ func TestKernelNamedNAT64OriginReturnRequiresBothProofs(t *testing.T) {
 	if _, err := publisher.inspectGuards(ctx, layout); err != nil {
 		t.Fatal("origin return fixture differs from its immutable schema", err)
 	}
+	// Observe the exact export boundary, including the point where older
+	// code temporarily replaced the connection mark with a registry token.
+	// These counters require the admitted mark throughout export, and the
+	// complete packet mark/priority restored before physical enforcement.
+	for _, leg := range transport.legs {
+		if leg.protocol != "udp" {
+			continue
+		}
+		name := leg.name
+		packetNft(ctx, t, fmt.Sprintf(`
+add counter inet %s %s_connection {}
+add counter inet %s %s_metadata {}
+insert rule inet %s %s_export_checked_record ct mark %#x counter name %s_connection
+insert rule inet %s %s_export meta mark set (meta mark & 0xff00e3ff) | 0x00551c00
+add chain inet %s %s_observe { type filter hook postrouting priority 202; policy accept; }
+add rule inet %s %s_observe oifname %q %s meta mark & 0x00ff1c00 == 0x00551c00 meta priority %s counter name %s_metadata`,
+			ownedTable, name, ownedTable, name, ownedTable, name, 23<<policy.OwnershipRuleBits, name,
+			ownedTable, name, ownedTable, name, ownedTable, name, transport.component,
+			leg.geometry(false).text, epochClassID(23<<policy.OwnershipRuleBits), name))
+	}
 	client, translated, target := packetSocket(t, "peer0"), packetSocket(t, "n64peer"), packetSocket(t, "device0")
 	serial := uint16(60020)
 	for _, mode := range []string{"joined", "missing-origin", "wrong-origin", "missing-authorization", "joined-again"} {
@@ -126,6 +147,7 @@ func TestKernelNamedNAT64OriginReturnRequiresBothProofs(t *testing.T) {
 			reply.sourcePort, reply.destinationPort = wire.destinationPort, wire.sourcePort
 			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:00:13", "02:00:00:00:01:13"
 			packetNft(ctx, t, "flush map inet "+ownedTable+" "+transport.name+"_udp_reply_origin_proof")
+			exportedAt := time.Now()
 			sendPacket(ctx, t, target, packetFrame(t, reply))
 			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:01:64", "02:00:00:00:00:64"
 			receivePacket(ctx, t, translated, packetFrame(t, reply), true)
@@ -182,6 +204,19 @@ func TestKernelNamedNAT64OriginReturnRequiresBothProofs(t *testing.T) {
 			sendPacket(ctx, t, translated, packetFrame(t, reply))
 			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:01:10", "02:00:00:00:00:10"
 			receivePacket(ctx, t, client, packetFrame(t, reply), mode == "joined" || mode == "joined-again")
+			if elapsed := time.Since(exportedAt); elapsed >= 1500*time.Millisecond {
+				t.Fatalf("return probe exceeded its live proof window: %s", elapsed)
+			}
 		})
+	}
+	for _, leg := range transport.legs {
+		if leg.protocol != "udp" {
+			continue
+		}
+		for _, suffix := range []string{"_connection", "_metadata"} {
+			if count := guardFixtureCounter(ctx, t, ownedTable, leg.name+suffix); count != 5 {
+				t.Fatalf("NAT64 export changed connection or packet metadata: %s=%d", leg.name+suffix, count)
+			}
+		}
 	}
 }

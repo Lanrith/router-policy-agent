@@ -46,11 +46,11 @@ func TestNAT64TokenRegistryIsDeterministicAtomicAndNonSerializable(t *testing.T)
 	var batch struct {
 		Commands []map[string]json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(firstData, &batch); err != nil || len(batch.Commands) != 21 {
+	if err := json.Unmarshal(firstData, &batch); err != nil || len(batch.Commands) != 23 {
 		t.Fatal("NAT64 token publication is not one complete replacement", err)
 	}
 	for index, command := range batch.Commands {
-		if index < 15 && command["flush"] == nil || index >= 15 && command["add"] == nil || len(command) != 1 {
+		if index < 16 && command["flush"] == nil || index >= 16 && command["add"] == nil || len(command) != 1 {
 			t.Fatal("NAT64 token publication is not flush-before-add")
 		}
 	}

@@ -120,6 +120,13 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	chains := transport.chains()
+	facts, err := nativeTranslationFacts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeNativeChains(chains, facts); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range nativeChainNames(chains) {
 		lines = append(lines, "chain "+name+" {")
 		lines = append(lines, nativeRulesText(chains[name])...)
@@ -160,7 +167,7 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 			if imported {
 				lines = append(lines, "jump check_import")
 				if !leg.reply {
-					lines = append(lines, "ct zone != 0 drop")
+					lines = append(lines, "ct zone != 0 drop", "jump native_translation_facts_capture")
 				}
 			}
 			lines = append(lines, "counter name "+caller+"_end", "accept", "}")
@@ -276,7 +283,7 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 	}
 	inspect := []struct{ kind, name string }{{"map", transport.name + "_zones"}, {"map", transport.name + "_aliases"},
 		{"set", transport.name + "_active_aliases"}, {"set", transport.name + "_sources"},
-		{"map", transport.name + "_tokens"}, {"map", transport.name + "_token_epoch"}, {"map", transport.name + "_token_context"}, {"map", transport.name + "_token_channel"}, {"map", transport.name + "_token_origin"},
+		{"map", transport.name + "_tokens"}, {"map", transport.name + "_token_epoch"}, {"map", transport.name + "_token_context"}, {"map", transport.name + "_token_channel"}, {"map", transport.name + "_token_origin"}, {"map", transport.name + "_export_channel"},
 		{"set", transport.name + "_token_epoch_pairs"}}
 	for _, leg := range transport.legs {
 		inspect = append(inspect, struct{ kind, name string }{"map", leg.name + "_proof"})
