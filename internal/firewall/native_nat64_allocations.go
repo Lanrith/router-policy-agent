@@ -79,6 +79,7 @@ func (prepared *preparedNAT64Allocations) expectedData(ctx context.Context) ([]b
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
 	}
+	operations = append(operations, prepared.transport.tupleProofClears()...)
 	if len(rows[prepared.transport.name+"_zones"]) != 0 {
 		operations = append(operations,
 			map[string]any{"add": map[string]any{"element": map[string]any{"family": "inet", "table": ownedTable, "name": prepared.transport.name + "_zones", "elem": rows[prepared.transport.name+"_zones"]}}},
@@ -223,6 +224,7 @@ func nat64AllocationClearData(ctx context.Context, transport *nativeNAT64Transpo
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
 	}
+	operations = append(operations, transport.tupleProofClears()...)
 	return json.Marshal(map[string]any{"nftables": operations})
 }
 

@@ -96,6 +96,7 @@ func (tokens *nativeNAT64Tokens) data(ctx context.Context) ([]byte, error) {
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
 	}
+	operations = append(operations, tokens.transport.tupleProofClears()...)
 	if !tokens.clear {
 		rows, err := tokens.elements(ctx)
 		if err != nil {

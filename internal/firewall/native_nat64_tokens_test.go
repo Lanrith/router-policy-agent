@@ -46,11 +46,11 @@ func TestNAT64TokenRegistryIsDeterministicAtomicAndNonSerializable(t *testing.T)
 	var batch struct {
 		Commands []map[string]json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(firstData, &batch); err != nil || len(batch.Commands) != 10 {
+	if err := json.Unmarshal(firstData, &batch); err != nil || len(batch.Commands) != 16 {
 		t.Fatal("NAT64 token publication is not one complete replacement", err)
 	}
 	for index, command := range batch.Commands {
-		if index < 5 && command["flush"] == nil || index >= 5 && command["add"] == nil || len(command) != 1 {
+		if index < 11 && command["flush"] == nil || index >= 11 && command["add"] == nil || len(command) != 1 {
 			t.Fatal("NAT64 token publication is not flush-before-add")
 		}
 	}
@@ -85,6 +85,71 @@ func mustNAT64TokenData(t *testing.T, tokens *nativeNAT64Tokens) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestNAT64ReplacementAndRevocationWithdrawEveryOldTuple(t *testing.T) {
+	t.Parallel()
+	transport, ledger, entries := nat64AllocationFixture(t)
+	oldState := nativeNAT64TokenState{epoch: 0x1c00, context: 0xd3000000, channel: 0x1c00}
+	newState := nativeNAT64TokenState{epoch: 0x2000, context: oldState.context, channel: 0x2000}
+	oldTokens, err := newNativeNAT64Tokens(t.Context(), transport, []nativeNAT64TokenState{oldState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTokens, err := newNativeNAT64Tokens(t.Context(), transport, []nativeNAT64TokenState{newState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldTokens.entries[0].token != newTokens.entries[0].token || oldTokens.entries[0].epoch == newTokens.entries[0].epoch {
+		t.Fatal("fixture did not reassign an opaque token to a new authority epoch")
+	}
+	clearTokens, err := prepareNativeNAT64TokenClear(t.Context(), transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocations, err := prepareNativeNAT64Allocations(t.Context(), transport, ledger,
+		&testNAT64Readiness{transport: transport, entries: entries, ready: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearAllocations, err := prepareNativeNAT64AllocationClear(t.Context(), transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{
+		"tokens replaced":      mustNAT64TokenData(t, newTokens),
+		"tokens revoked":       mustNAT64TokenData(t, clearTokens),
+		"allocations replaced": allocations.batch.data,
+		"allocations revoked":  clearAllocations.batch.data,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var batch struct {
+				Commands []struct {
+					Flush struct {
+						Map *objectReference `json:"map"`
+					} `json:"flush"`
+					Add json.RawMessage `json:"add"`
+				} `json:"nftables"`
+			}
+			if err := json.Unmarshal(data, &batch); err != nil {
+				t.Fatal(err)
+			}
+			withdrawn := map[string]bool{}
+			for _, command := range batch.Commands {
+				if len(command.Add) != 0 {
+					break
+				}
+				if ref := command.Flush.Map; ref != nil && ref.Family == "inet" && ref.Table == ownedTable {
+					withdrawn[ref.Name] = true
+				}
+			}
+			for _, suffix := range []string{"_tcp_forward_proof", "_tcp_reply_proof", "_udp_forward_proof", "_udp_reply_proof", "_icmp_forward_proof", "_icmp_reply_proof"} {
+				if !withdrawn[transport.name+suffix] {
+					t.Fatal("new state could reinterpret a previous tuple before withdrawal", suffix)
+				}
+			}
+		})
+	}
 }
 
 func TestNAT64TokenRegistryRejectsUnownedOrIncoherentMetadata(t *testing.T) {

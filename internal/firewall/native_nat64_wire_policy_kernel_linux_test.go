@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lanrith/router-policy-agent/internal/binding"
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
 
@@ -17,6 +18,15 @@ import (
 // injected IPv4 equivalent can reach the actual final-interface policy. The
 // test-only readiness object is synthetic; real TAYGA is qualified separately.
 func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false)
+}
+
+func TestKernelNamedNAT64WireSourceEpochAndAllocationScopes(t *testing.T) {
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, true)
+}
+
+func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, sourceOwned bool) {
+	t.Helper()
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -25,6 +35,9 @@ func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
 	packetIP(ctx, t, "route", "add", "10.251.0.0/24", "dev", "nat64-internal")
 	b := nat64TransportFixture(t)
 	b.NetworkModel.ManagedNetworks = []policy.Role{}
+	if sourceOwned {
+		b.NetworkModel.ManagedNetworks = []policy.Role{b.Zones[0].Role}
+	}
 	b.NAT64[0].SourceMappings = []policy.NAT64SourceMapping{{
 		Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10"), Ready: true}}
 	b.NetworkModel.Rules = []policy.NetworkRule{
@@ -79,6 +92,40 @@ func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 	executeGuardFixture(ctx, t, preparedConfiguration.batch.data)
+	var sources *nativeSourcePublication
+	publishOwnership := func(t *testing.T, epoch uint32) {
+		t.Helper()
+		now := time.Now().Round(0).UTC()
+		snapshot := binding.Snapshot{SchemaVersion: 1, Generation: "nat64-wire-source", ObservedAt: now, Complete: true,
+			Records: []binding.Record{{MAC: "02:00:00:00:00:10", NAS: "synthetic-nas", Interface: "lan10", VLAN: 10,
+				AssociatedAt: now, AssociationID: "nat64-wire-association", Addresses: []binding.Address{{IP: entries[0].Source,
+					Source: "qualified_ipv6", OwnershipID: "nat64-wire-address", ObservedAt: now, ValidUntil: now.Add(90 * time.Second)}}}}}
+		ownership, err := compiler.CompileOwnership(ctx, snapshot, now, policy.CaptureAge())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ownership, err = ownership.InEpoch(ctx, epoch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := renderer.prepareNativeOwnership(ctx, ownership, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// An epoch change must pass through the ordinary revocation boundary.
+		prepared, err = prepareNativeNAT64SourceRefresh(ctx, prepared, sources, 0, transport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executeGuardFixture(ctx, t, prepared.batch.data)
+		sources, err = nativeSourceReceipt(ctx, prepared)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sourceOwned {
+		publishOwnership(t, 19)
+	}
 	publisher, err := openProcess(ctx, "/usr/sbin/nft")
 	if err != nil {
 		t.Fatal(err)
@@ -98,9 +145,9 @@ func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	publishTokens := func() {
+	publishTokens := func(t *testing.T) {
 		t.Helper()
-		tokens, err := deriveNativeNAT64Tokens(ctx, transport, layout.native, ledger, configuration, nil, time.Now().UTC())
+		tokens, err := deriveNativeNAT64Tokens(ctx, transport, layout.native, ledger, configuration, sources, time.Now().UTC())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,12 +156,15 @@ func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
 		}
 	}
 	publishAllocations()
-	publishTokens()
+	publishTokens(t)
 	if _, err := publisher.inspectGuards(ctx, layout); err != nil {
 		t.Fatal("installed final-interface graph differs from its immutable schema", err)
 	}
 	client, translated, target := packetSocket(t, "peer0"), packetSocket(t, "n64peer"), packetSocket(t, "device0")
 	serial := uint16(46000)
+	if sourceOwned {
+		serial = 47000
+	}
 	probe := func(name, encoded, destination string, rawAllowed, allowed bool) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
@@ -144,6 +194,86 @@ func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
 	probe("missing-source-scope", "fdca:1a2b:e064::af0:30a", "10.240.3.10", true, false)
 	publishAllocations() // also atomically revokes every token.
 	probe("scope-is-not-permission", "fdca:1a2b:e064::af0:30a", "10.240.3.10", false, false)
-	publishTokens()
+	publishTokens(t)
 	probe("restored-fresh-export", "fdca:1a2b:e064::af0:30a", "10.240.3.10", true, true)
+	publishTokens(t)
+	serial-- // Retransmit the existing connection after a same-epoch refresh.
+	probe("same-epoch-refresh-retains-flow", "fdca:1a2b:e064::af0:30a", "10.240.3.10", true, true)
+	if sourceOwned {
+		t.Run("withdrawn-source-cannot-borrow-configuration", func(t *testing.T) {
+			serial++
+			original := packetDatagram{source: entries[0].Source, destination: netip.MustParseAddr("fdca:1a2b:e064::af0:30a"),
+				sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
+				sourcePort: serial, destinationPort: 6061, payload: "withdrawn-source-export"}
+			exported := time.Now()
+			sendPacket(ctx, t, client, packetFrame(t, original))
+			rawWire := original
+			rawWire.sourceMAC, rawWire.destinationMAC = "02:00:00:00:01:64", "02:00:00:00:00:64"
+			receivePacket(ctx, t, translated, packetFrame(t, rawWire), true)
+			withdrawal, err := prepareNativeNAT64OwnershipClear(ctx, transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executeGuardFixture(ctx, t, withdrawal.batch.data)
+			sources = nil
+			publishTokens(t)
+			if time.Since(exported) >= 1500*time.Millisecond {
+				t.Fatal("revoked-source probe exceeded its two-second proof window")
+			}
+			wire := original
+			wire.source, wire.destination = entries[0].Alias, netip.MustParseAddr("10.240.3.10")
+			wire.sourceMAC, wire.destinationMAC = "02:00:00:00:00:64", "02:00:00:00:01:64"
+			sendPacket(ctx, t, translated, packetFrame(t, wire))
+			wire.sourceMAC, wire.destinationMAC = "02:00:00:00:01:13", "02:00:00:00:00:13"
+			receivePacket(ctx, t, target, packetFrame(t, wire), false)
+		})
+		publishOwnership(t, 20)
+		publishTokens(t)
+		probe("restored-owned-source-fresh-export", "fdca:1a2b:e064::af0:30a", "10.240.3.10", true, true)
+	}
+	t.Run("old-export-cannot-acquire-new-epoch", func(t *testing.T) {
+		serial++
+		original := packetDatagram{source: entries[0].Source, destination: netip.MustParseAddr("fdca:1a2b:e064::af0:30a"),
+			sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
+			sourcePort: serial, destinationPort: 6061, payload: "old-epoch-export"}
+		exported := time.Now()
+		sendPacket(ctx, t, client, packetFrame(t, original))
+		rawWire := original
+		rawWire.sourceMAC, rawWire.destinationMAC = "02:00:00:00:01:64", "02:00:00:00:00:64"
+		receivePacket(ctx, t, translated, packetFrame(t, rawWire), true)
+
+		// Leave the exported tuple live without creating its IPv4 connection.
+		// The new registry reuses opaque IDs for a different authority epoch.
+		if sourceOwned {
+			withdrawal, err := prepareNativeNAT64OwnershipClear(ctx, transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executeGuardFixture(ctx, t, withdrawal.batch.data)
+			sources = nil
+			publishTokens(t)
+			publishOwnership(t, 21)
+		} else {
+			configuration, err = compiler.CompileOwnerConfiguration(ctx, 24)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := renderer.prepareConfiguration(ctx, configuration)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executeGuardFixture(ctx, t, prepared.batch.data)
+		}
+		publishTokens(t)
+		if time.Since(exported) >= 1500*time.Millisecond {
+			t.Fatal("old-tuple probe exceeded its two-second proof window")
+		}
+		wire := original
+		wire.source, wire.destination = entries[0].Alias, netip.MustParseAddr("10.240.3.10")
+		wire.sourceMAC, wire.destinationMAC = "02:00:00:00:00:64", "02:00:00:00:01:64"
+		sendPacket(ctx, t, translated, packetFrame(t, wire))
+		wire.sourceMAC, wire.destinationMAC = "02:00:00:00:01:13", "02:00:00:00:00:13"
+		receivePacket(ctx, t, target, packetFrame(t, wire), false)
+	})
+	probe("new-epoch-fresh-export", "fdca:1a2b:e064::af0:30a", "10.240.3.10", true, true)
 }

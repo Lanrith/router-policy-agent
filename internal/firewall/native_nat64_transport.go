@@ -194,6 +194,20 @@ func (transport *nativeNAT64Transport) definitions() []string {
 	return result
 }
 
+// Opaque token IDs are deterministic within a registry and can be reassigned
+// after replacement. Withdraw all tuple correlations in the same transaction
+// before new token or allocation rows become visible. Their two-second timeout
+// alone cannot prevent an old packet from acquiring a new authority epoch.
+func (transport *nativeNAT64Transport) tupleProofClears() []any {
+	operations := make([]any, 0, len(transport.legs))
+	for _, leg := range transport.legs {
+		operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{
+			Family: "inet", Table: ownedTable, Name: leg.name + "_proof",
+		}}})
+	}
+	return operations
+}
+
 func (transport *nativeNAT64Transport) token() (string, any) {
 	text := "(ct mark) . (meta mark & 0xff00e3ff) . (meta priority)"
 	key := map[string]any{"concat": []any{nativeCT("mark"), guardBinary("&", guardMeta("mark"), nativeFactsMask), guardMeta("priority")}}

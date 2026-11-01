@@ -152,6 +152,13 @@ writer derives those memberships from the original allocation ledger and live
 translator proof, and replaces or clears them with the other allocation state.
 A different source's alias cannot be substituted by changing a serialized row.
 
+Token and allocation replacement or revocation also clear every TCP, UDP and
+ICMP tuple-proof map in the same kernel transaction. Opaque token IDs can be
+reassigned within the next registry; an old export must never acquire that
+registry's authority epoch. Packets in flight across publication can therefore
+be dropped. A permitted original must export a fresh tuple, and an old connection
+cannot acquire a newer configuration or ownership epoch through translation.
+
 The translator attachment's source floor permits only its IPv4 pool and IPv6
 translation prefix. WAN source validation rejects both ranges. These checks
 grant no access independently of allocation, policy, epochs and tuple proofs.
