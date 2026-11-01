@@ -97,7 +97,6 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 	access.add(translatedReply, nativeVerdict("jump", "validate_source"))
 	access.add(translatedReplyConfirm, nativeVerdict("jump", "validate_source"))
 	for _, transport := range transports {
-		access.add(original, nativeVerdict("jump", transport.name+"_request"))
 		for _, leg := range transport.legs {
 			if err := ctx.Err(); err != nil {
 				return err

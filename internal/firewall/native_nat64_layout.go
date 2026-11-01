@@ -157,14 +157,20 @@ func (access *nativeAccess) compileNAT64RawOrder(ctx context.Context, projected 
 			}
 		}
 		access.add(name, nativeVerdict("drop", ""))
-		dispatch := nativeJoin(nativeInterface("oifname", transport.component),
-			nativeMatch("ip6 daddr "+transport.prefix.String(), guardPayload("ip6", "daddr"), controllerPrefix(transport.prefix)),
-			nativeVerdict("goto", name))
+		geometry := nativeJoin(nativeInterface("oifname", transport.component),
+			nativeMatch("ip6 daddr "+transport.prefix.String(), guardPayload("ip6", "daddr"), controllerPrefix(transport.prefix)))
+		dispatch := []nativeScope{nativeJoin(geometry, nativeVerdict("goto", name))}
+		if hook == "guard_forward" {
+			// Demand belongs to the original IPv6 packet, after its source and
+			// mandatory floor checks but before an allocation exists. Recording
+			// it never skips the allocation, epoch or authorization guards.
+			dispatch = slices.Insert(dispatch, 0, nativeJoin(geometry, nativeVerdict("jump", transport.name+"_request")))
+		}
 		position := slices.IndexFunc(access.inet[hook], func(rule nativeScope) bool { return rule.text == "jump native_denies" })
 		if position < 0 {
 			return errors.New("firewall: NAT64 ordered dispatch lost mandatory deny boundary")
 		}
-		access.inet[hook] = slices.Insert(access.inet[hook], position, dispatch)
+		access.inet[hook] = slices.Insert(access.inet[hook], position, dispatch...)
 	}
 	// Rule order is part of the immutable profile. access.contexts is a map for
 	// indexed lookup, so ranging over it would make otherwise identical image

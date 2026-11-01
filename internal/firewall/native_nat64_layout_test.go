@@ -103,9 +103,9 @@ func TestNAT64AllocationRequestsPreservePolicyAndGrantNoAccess(t *testing.T) {
 		strings.Contains(request, "accept") {
 		t.Fatal("NAT64 request channel broadened policy or acquired packet authority", request)
 	}
-	original := strings.Join(nativeRulesText(layout.native.inet["native_n64_wire_original"]), "\n")
-	ordered := []string{"jump validate_source", "jump native_forward_floor", `iifname "lan10" jump native_source`,
-		"jump native_n64_0_request"}
+	original := strings.Join(nativeRulesText(layout.native.inet["guard_forward"]), "\n")
+	ordered := []string{"jump native_forward_floor", "jump validate_source", `iifname "lan10" jump native_source`,
+		"jump native_n64_0_request", "goto native_n64_0_ordered_guard_forward"}
 	position := -1
 	for _, expected := range ordered {
 		next := strings.Index(original[position+1:], expected)
@@ -114,8 +114,9 @@ func TestNAT64AllocationRequestsPreservePolicyAndGrantNoAccess(t *testing.T) {
 		}
 		position += next + 1
 	}
-	if !strings.HasSuffix(original, "drop") {
-		t.Fatal("NAT64 request path no longer fails closed", original)
+	wire := strings.Join(nativeRulesText(layout.native.inet["native_n64_wire_original"]), "\n")
+	if strings.Contains(wire, "_request") || !strings.HasSuffix(wire, "drop") {
+		t.Fatal("NAT64 demand was attached to the translated packet or wire admission stopped failing closed", wire)
 	}
 }
 
