@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -93,7 +94,7 @@ func (access *nativeAccess) compileNAT64(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := access.compileNAT64Requests(ctx, projected, transport); err != nil {
+		if err := access.compileNAT64Requests(ctx, transport); err != nil {
 			return err
 		}
 		access.inet["native_n64_zone"] = append(access.inet["native_n64_zone"], transport.zoneRules()...)
@@ -114,27 +115,47 @@ func (access *nativeAccess) compileNAT64(ctx context.Context) error {
 // The caller continues into allocation-gated enforcement after this returns.
 func (access *nativeAccess) compileNAT64Requests(
 	ctx context.Context,
-	projected *nativeRuleSet,
 	transport *nativeNAT64Transport,
 ) error {
-	if ctx == nil || access == nil || projected == nil || transport == nil {
+	if ctx == nil || access == nil || transport == nil {
 		return errors.New("firewall: missing NAT64 request dependencies")
 	}
+	paths, err := nativeNAT64EgressPolicies(ctx, access.ruleSet, transport)
+	if err != nil {
+		return err
+	}
 	chain := transport.name + "_request"
-	for index, rule := range projected.rules {
-		scopes, err := projected.scopes(ctx, index, false, false)
+	seen := map[string]bool{}
+	for _, path := range paths {
+		// Generic translator rules often yield identical raw programs on
+		// several final interfaces. Deduplicate exact encodings only here,
+		// where the existential result records demand and grants no access.
+		encoded, err := json.Marshal(path.raw.rules)
 		if err != nil {
-			return err
+			return errors.New("firewall: NAT64 request path encoding failed")
 		}
-		for _, scope := range scopes {
-			if rule.Action == "deny" {
-				access.add(chain, scope, nativeVerdict("return", ""))
-				continue
+		if seen[string(encoded)] {
+			continue
+		}
+		seen[string(encoded)] = true
+		branch := chain + "_path_" + strconv.Itoa(len(seen)-1)
+		access.add(chain, nativeVerdict("jump", branch))
+		for index, rule := range path.raw.rules {
+			scopes, err := path.raw.scopes(ctx, index, false, false)
+			if err != nil {
+				return err
 			}
-			access.add(chain, scope,
-				nativeDynamicUpdate(transport.name+"_pending", "ip6 saddr", guardPayload("ip6", "saddr"), nil),
-				nativeVerdict("return", ""))
+			for _, scope := range scopes {
+				if rule.Action == "deny" {
+					access.add(branch, scope, nativeVerdict("return", ""))
+					continue
+				}
+				access.add(branch, scope,
+					nativeDynamicUpdate(transport.name+"_pending", "ip6 saddr", guardPayload("ip6", "saddr"), nil),
+					nativeVerdict("return", ""))
+			}
 		}
+		access.add(branch, nativeVerdict("return", ""))
 	}
 	access.add(chain, nativeVerdict("return", ""))
 	return ctx.Err()

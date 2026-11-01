@@ -19,27 +19,7 @@ func TestKernelNamedNAT64PendingRequiresOriginalPolicyAndSource(t *testing.T) {
 	t.Cleanup(func() { requireKernelIsolation(t) })
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	setupPacketLinks(ctx, t)
-	for _, name := range []string{"wan", "nat64-internal"} {
-		arguments := []string{"link", "add", name, "type", "dummy"}
-		if name == "nat64-internal" {
-			arguments = []string{"link", "add", name, "type", "veth", "peer", "name", "n64peer"}
-		}
-		packetIP(ctx, t, arguments...)
-		t.Cleanup(func() {
-			cleanup, done := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
-			defer done()
-			packetIP(cleanup, t, "link", "delete", name)
-		})
-	}
-	packetIP(ctx, t, "link", "set", "n64peer", "address", "02:00:00:00:00:64")
-	for _, name := range []string{"wan", "nat64-internal", "n64peer"} {
-		packetIP(ctx, t, "link", "set", name, "up")
-	}
-	packetIP(ctx, t, "-6", "route", "add", "fdca:1a2b:e064::/96", "dev", "nat64-internal")
-	for _, address := range []string{"fdca:1a2b:e064::af0:30a", "fdca:1a2b:e064::af0:30b"} {
-		packetIP(ctx, t, "neighbor", "add", address, "lladdr", "02:00:00:00:00:64", "dev", "nat64-internal", "nud", "permanent")
-	}
+	setupNAT64PendingLinks(ctx, t)
 	b := nat64TransportFixture(t)
 	b.NetworkModel.Rules = []policy.NetworkRule{
 		{Action: "deny", Authorization: "inherit", Protocol: "any", From: []policy.NetworkSelector{{Interface: "lan10"}},
@@ -48,20 +28,7 @@ func TestKernelNamedNAT64PendingRequiresOriginalPolicyAndSource(t *testing.T) {
 			From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64"), MAC: "02:00:00:00:00:10"}},
 			To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}}},
 	}
-	layout, err := newNativeNAT64AccessLayout(ctx, b, "nat64-internal")
-	if err != nil {
-		t.Fatal(err)
-	}
-	program, err := layout.program(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	packetNft(ctx, t, string(program))
-	t.Cleanup(func() {
-		cleanup, done := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
-		defer done()
-		packetNft(cleanup, t, "delete table inet "+ownedTable+"; delete table netdev "+ownedTable)
-	})
+	installNAT64PendingPolicy(ctx, t, b)
 	peer, wrong, translator := packetSocket(t, "peer0"), packetSocket(t, "device0"), packetSocket(t, "n64peer")
 	serial := uint16(54000)
 	for _, test := range []struct {
@@ -90,6 +57,91 @@ func TestKernelNamedNAT64PendingRequiresOriginalPolicyAndSource(t *testing.T) {
 				packet.destinationMAC = "02:00:00:00:01:13"
 			}
 			sendPacket(ctx, t, input, packetFrame(t, packet))
+			receivePacket(ctx, t, translator, packetFrame(t, packet), false)
+			listing := kernelFixtureCommand(ctx, t, "list", "set", "inet", ownedTable, "native_n64_0_pending")
+			if got := elementCount(t, listing, "native_n64_0_pending"); got != test.demand {
+				t.Fatalf("original IPv6 allocation demand = %d, want %d", got, test.demand)
+			}
+		})
+	}
+}
+
+func setupNAT64PendingLinks(ctx context.Context, t *testing.T) {
+	t.Helper()
+	setupPacketLinks(ctx, t)
+	for _, name := range []string{"wan", "nat64-internal"} {
+		arguments := []string{"link", "add", name, "type", "dummy"}
+		if name == "nat64-internal" {
+			arguments = []string{"link", "add", name, "type", "veth", "peer", "name", "n64peer"}
+		}
+		packetIP(ctx, t, arguments...)
+		t.Cleanup(func() {
+			cleanup, done := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
+			defer done()
+			packetIP(cleanup, t, "link", "delete", name)
+		})
+	}
+	packetIP(ctx, t, "link", "set", "n64peer", "address", "02:00:00:00:00:64")
+	for _, name := range []string{"wan", "nat64-internal", "n64peer"} {
+		packetIP(ctx, t, "link", "set", name, "up")
+	}
+	packetIP(ctx, t, "-6", "route", "add", "fdca:1a2b:e064::/96", "dev", "nat64-internal")
+	for _, address := range []string{"fdca:1a2b:e064::af0:30a", "fdca:1a2b:e064::af0:30b"} {
+		packetIP(ctx, t, "neighbor", "add", address, "lladdr", "02:00:00:00:00:64", "dev", "nat64-internal", "nud", "permanent")
+	}
+}
+
+func installNAT64PendingPolicy(ctx context.Context, t *testing.T, b policy.Baseline) {
+	t.Helper()
+	layout, err := newNativeNAT64AccessLayout(ctx, b, "nat64-internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := layout.program(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packetNft(ctx, t, string(program))
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
+		defer done()
+		packetNft(cleanup, t, "delete table inet "+ownedTable+"; delete table netdev "+ownedTable)
+	})
+}
+
+func TestKernelNamedNAT64PendingPreservesLogicalDestinationOrder(t *testing.T) {
+	requireKernelIsolation(t)
+	t.Cleanup(func() { requireKernelIsolation(t) })
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	setupNAT64PendingLinks(ctx, t)
+	peer, translator := packetSocket(t, "peer0"), packetSocket(t, "n64peer")
+	for _, test := range []struct {
+		name, denied, allowed, authorization string
+		demand                               int
+	}{
+		{"WAN deny does not suppress LAN demand", "wan", "lan13", "owner", 1},
+		{"LAN deny does not suppress WAN demand", "lan13", "wan", "owner", 1},
+		{"directory LAN demand is connectivity only", "wan", "lan13", "directory", 1},
+		{"same LAN deny terminates", "lan13", "lan13", "owner", 0},
+		{"same WAN deny terminates", "wan", "wan", "owner", 0},
+		{"unscoped deny terminates every LAN path", "", "lan13", "owner", 0},
+		{"unscoped deny terminates every WAN path", "", "wan", "owner", 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			b := nat64TransportFixture(t)
+			b.NetworkModel.Rules = []policy.NetworkRule{
+				{Action: "deny", Authorization: "inherit", Protocol: "any", From: []policy.NetworkSelector{{Interface: "lan10"}},
+					To: []policy.NetworkSelector{{Interface: test.denied, Addresses: sourceClassPrefixes("10.240.3.10/32")}}},
+				{Action: "allow", Authorization: test.authorization, Protocol: "udp", Ports: []uint16{6061},
+					From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64"), MAC: "02:00:00:00:00:10"}},
+					To:   []policy.NetworkSelector{{Interface: test.allowed, Addresses: sourceClassPrefixes("10.240.3.10/32")}}},
+			}
+			installNAT64PendingPolicy(ctx, t, b)
+			packet := packetDatagram{source: netip.MustParseAddr("fdca:1a2b::20"), destination: netip.MustParseAddr("fdca:1a2b:e064::af0:30a"),
+				sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10", sourcePort: 55000,
+				destinationPort: 6061, payload: "logical-demand-" + test.name}
+			sendPacket(ctx, t, peer, packetFrame(t, packet))
 			receivePacket(ctx, t, translator, packetFrame(t, packet), false)
 			listing := kernelFixtureCommand(ctx, t, "list", "set", "inet", ownedTable, "native_n64_0_pending")
 			if got := elementCount(t, listing, "native_n64_0_pending"); got != test.demand {

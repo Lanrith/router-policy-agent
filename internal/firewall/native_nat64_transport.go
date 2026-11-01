@@ -21,6 +21,7 @@ type nativeNAT64Transport struct {
 	baselineHash    string
 	component, name string
 	uplink          string
+	destinations    []string
 	prefix, pool    netip.Prefix
 	mappings        []policy.NAT64SourceMapping
 	sourceNetworks  map[string][]netip.Prefix
@@ -81,8 +82,9 @@ func newNativeNAT64Transport(ctx context.Context, baseline policy.Baseline, comp
 		}
 		transport := &nativeNAT64Transport{geometry: geometry, baselineHash: compiler.BaselineHash(), component: component.ID,
 			name: fmt.Sprintf("native_n64_%d", index), uplink: b.NetworkModel.UplinkInterface, prefix: component.Prefix, pool: *component.SourcePool,
-			mappings: slices.Clone(component.SourceMappings), sourceNetworks: map[string][]netip.Prefix{}, ruleCount: len(b.NetworkModel.Rules)}
+			destinations: []string{b.NetworkModel.UplinkInterface}, mappings: slices.Clone(component.SourceMappings), sourceNetworks: map[string][]netip.Prefix{}, ruleCount: len(b.NetworkModel.Rules)}
 		for _, zone := range b.Zones {
+			transport.destinations = append(transport.destinations, zone.Interfaces...)
 			for _, iface := range zone.Interfaces {
 				for _, network := range zone.Networks {
 					if network.Addr().Is6() {
@@ -91,6 +93,8 @@ func newNativeNAT64Transport(ctx context.Context, baseline policy.Baseline, comp
 				}
 			}
 		}
+		slices.Sort(transport.destinations)
+		transport.destinations = slices.Compact(transport.destinations)
 		for _, protocol := range []string{"tcp", "udp", "icmp"} {
 			for _, reply := range []bool{false, true} {
 				direction := "forward"

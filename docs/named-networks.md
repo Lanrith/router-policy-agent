@@ -137,6 +137,16 @@ It needs no signal or ptrace authority: its capability ceiling remains
 ordered policy, current ownership, directory grants and translated tuple checks
 remain separate requirements.
 
+Allocation demand preserves a separate ordered program for each possible final
+IPv4 interface. A WAN-only deny terminates the WAN program; it does not suppress
+a permitted LAN request. An unscoped deny applies to every program. Each program
+retains the original source interface, IPv6 range, MAC, protocol, ports and rule
+indices. Identical raw programs share a request chain. The result only records
+bounded pending demand: owner and directory candidates still gain no forwarding
+permission without the independent allocation, epoch, identity and tuple checks.
+Final-egress authorization and managed destination-device integration remain
+under qualification.
+
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection
 epoch; it cannot assign the latest epoch to an old connection. Inspection checks

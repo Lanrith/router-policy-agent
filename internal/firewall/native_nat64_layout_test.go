@@ -97,7 +97,13 @@ func TestNAT64AllocationRequestsPreservePolicyAndGrantNoAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := strings.Join(nativeRulesText(layout.native.inet["native_n64_0_request"]), "\n")
+	requestRules := []string{}
+	for _, name := range nativeChainNames(layout.native.inet) {
+		if strings.HasPrefix(name, "native_n64_0_request") {
+			requestRules = append(requestRules, nativeRulesText(layout.native.inet[name])...)
+		}
+	}
+	request := strings.Join(requestRules, "\n")
 	if !strings.Contains(request, "fdca:1a2b:e064::af0:30b return") ||
 		!strings.Contains(request, "udp dport 6061 update @native_n64_0_pending { ip6 saddr } return") ||
 		strings.Contains(request, "accept") {
