@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"sync/atomic"
 )
 
 // Freeze only independently compiled code-owned expectations, before exposing
@@ -56,7 +57,10 @@ func (schema *guardTableSchema) freezeFields(ctx context.Context, key string, he
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fields := &guardCompiledFields{encoded: map[string][]byte{}, values: map[string]any{}}
+	fields := &guardCompiledFields{
+		encoded: map[string][]byte{}, values: map[string]any{},
+		verified: map[string]*atomic.Pointer[guardVerifiedEncoding]{},
+	}
 	for name, value := range header {
 		encoded, err := json.Marshal(value)
 		if err != nil {
@@ -71,6 +75,7 @@ func (schema *guardTableSchema) freezeFields(ctx context.Context, key string, he
 			return errors.New("firewall: invalid normalized inspection field")
 		}
 		fields.encoded[name], fields.values[name] = encoded, value
+		fields.verified[name] = &atomic.Pointer[guardVerifiedEncoding]{}
 	}
 	schema.encoded[key] = fields
 	return nil

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 )
 
 // Both representations come from the completed compiler-owned header. Values
@@ -11,8 +12,35 @@ import (
 // observed rules. Keeping their trees avoids re-encoding every observed field
 // solely to compare object-key order. No lease or observation is cached here.
 type guardCompiledFields struct {
-	encoded map[string][]byte
-	values  map[string]any
+	encoded  map[string][]byte
+	values   map[string]any
+	verified map[string]*atomic.Pointer[guardVerifiedEncoding]
+}
+
+// A memo contains only bytes already compared with this field's independently
+// compiled expectation. It cannot retain a handle, set element or lease. Keep
+// one bounded, owned copy per immutable field; readers never mutate that copy.
+type guardVerifiedEncoding struct {
+	data []byte
+}
+
+func (fields *guardCompiledFields) equalValue(name string, actual, wanted []byte, expected any) bool {
+	memo := fields.verified[name]
+	if memo != nil {
+		if previous := memo.Load(); previous != nil && bytes.Equal(previous.data, actual) {
+			return true
+		}
+	}
+	observed, err := fixedGuardValue(actual)
+	if err != nil || !equalFixedGuardValues(expected, observed) {
+		return false
+	}
+	// Alternate whitespace/key order is accepted by the full comparator, but
+	// cannot grow retained memory in proportion to an arbitrary listing.
+	if memo != nil && len(actual) <= 2*len(wanted)+64 {
+		memo.Store(&guardVerifiedEncoding{data: bytes.Clone(actual)})
+	}
+	return true
 }
 
 func fixedGuardValue(data []byte) (any, error) {

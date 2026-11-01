@@ -373,8 +373,7 @@ func checkGuardObjectWithFields(fields map[string]json.RawMessage, expected map[
 				continue
 			}
 			if compiled.values != nil {
-				observed, err := fixedGuardValue(actual)
-				if err != nil || !equalFixedGuardValues(value, observed) {
+				if !compiled.equalValue(name, actual, wanted, value) {
 					return 0, errors.New("firewall: fixed guard field differs from compiled expectation")
 				}
 				continue
