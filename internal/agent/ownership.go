@@ -176,15 +176,22 @@ func (engine *Engine) refreshOwnership(ctx context.Context, bindings binding.Sna
 	if engine.options.Mode == Shadow {
 		return nil
 	}
-	if err := engine.publishClassification(ctx, history); err != nil {
+	rotated, err := engine.publishClassification(ctx, history)
+	if err != nil {
 		return err
 	}
 	if snapshot.Fingerprint != engine.ownershipFingerprint {
-		if err := engine.options.Firewall.ClearOwnership(ctx); err != nil {
-			return err
-		}
-		if err := engine.seal(ctx, history); err != nil {
-			return err
+		// A completed history rotation already withdrew both positive channels
+		// and verified the deny-only classifiers. No intervening source/grant
+		// publication occurs under this engine gate. Association-only changes
+		// still need their own withdrawal and sealing below.
+		if !rotated {
+			if err := engine.options.Firewall.ClearOwnership(ctx); err != nil {
+				return err
+			}
+			if err := engine.seal(ctx, history); err != nil {
+				return err
+			}
 		}
 		if err := engine.advanceOwnershipEpoch(ctx); err != nil {
 			return err
