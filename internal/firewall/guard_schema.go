@@ -72,6 +72,10 @@ func (layout *guardLayout) schema(family string) (*guardTableSchema, error) {
 			first, second := epochChannelHeaders(configuration)
 			if family == "inet" {
 				schema.maps[mapping] = first
+				if !configuration {
+					schema.sets[set] = second
+					schema.sets[set]["family"] = "inet"
+				}
 			} else {
 				schema.sets[set] = second
 			}

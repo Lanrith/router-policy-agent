@@ -77,16 +77,35 @@ func (origin *nativeNAT64TokenOrigin) deriveAt(ctx context.Context, utc time.Tim
 	if err != nil {
 		return nil, err
 	}
+	targets, err := origin.targetStates(ctx, utc, allocations, configuration.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	for _, target := range targets {
+		states = append(states, target.state)
+	}
+	states = compactNAT64TokenStates(states)
 	if len(states) == 0 {
 		return prepareNativeNAT64TokenClear(ctx, transport)
 	}
-	return newNativeNAT64Tokens(ctx, transport, states)
+	tokens, err := newNativeNAT64Tokens(ctx, transport, states)
+	if err != nil {
+		return nil, err
+	}
+	if err := tokens.bindTargets(ctx, targets); err != nil {
+		return nil, err
+	}
+	return tokens, nil
 }
 
 func nativeNAT64IPv6SourceIDs(snapshot policy.OwnershipSnapshot) map[nativeSourceIP]uint32 {
+	return nativeNAT64AddressIDs(snapshot, true)
+}
+
+func nativeNAT64AddressIDs(snapshot policy.OwnershipSnapshot, ipv6 bool) map[nativeSourceIP]uint32 {
 	inventory := []nativeSourceIP{}
 	for _, address := range snapshot.Addresses {
-		if address.Address.Is6() {
+		if address.Address.Is6() == ipv6 {
 			inventory = append(inventory, nativeSourceIP{nativeSourceIdentity: nativeSourceIdentity{iface: address.Interface, mac: address.MAC}, address: address.Address})
 		}
 	}

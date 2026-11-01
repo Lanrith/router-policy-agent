@@ -51,6 +51,23 @@ func (compiler *Compiler) CompileNAT64AllocationGeometry(ctx context.Context) (*
 	return &NAT64AllocationGeometry{compiler: compiler}, nil
 }
 
+// EligibleTarget checks the selected component's declared destination class.
+// It supplies no access permission, ownership or translator-readiness proof.
+func (geometry *NAT64AllocationGeometry) EligibleTarget(ctx context.Context, componentID string, address netip.Addr) (bool, error) {
+	if ctx == nil || geometry == nil || geometry.compiler == nil {
+		return false, errors.New("policy: missing NAT64 target geometry")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	for _, component := range geometry.compiler.baseline.NAT64 {
+		if component.ID == componentID {
+			return eligible(component, address), nil
+		}
+	}
+	return false, errors.New("policy: undeclared NAT64 target component")
+}
+
 // MarshalJSON prevents a diagnostic encoding from replacing original geometry.
 func (geometry NAT64AllocationGeometry) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("policy: original NAT64 allocation geometry cannot be serialized")

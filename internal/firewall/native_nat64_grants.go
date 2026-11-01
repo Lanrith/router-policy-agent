@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
 
 func nativeNAT64GrantRefs() []objectReference {
-	refs := make([]objectReference, 0, 8)
+	refs := make([]objectReference, 0, 16)
 	for _, family := range []string{"inet", "netdev"} {
 		for _, protocol := range []string{"tcp", "udp"} {
 			for _, version := range []int{4, 6} {
-				refs = append(refs, objectReference{Family: family, Table: ownedTable, Name: fmt.Sprintf("native_n64_from%d_%s", version, protocol)})
+				for _, direction := range []string{"from", "to"} {
+					refs = append(refs, objectReference{Family: family, Table: ownedTable, Name: fmt.Sprintf("native_n64_%s%d_%s", direction, version, protocol)})
+				}
 			}
 		}
 	}
@@ -31,7 +34,7 @@ func nativeNAT64GrantDefinitions(family string) []string {
 			continue
 		}
 		address := "ipv4_addr"
-		if ref.Name == "native_n64_from6_tcp" || ref.Name == "native_n64_from6_udp" {
+		if strings.Contains(ref.Name, "6_") {
 			address = "ipv6_addr"
 		}
 		definitions = append(definitions, guardSetDefinition(ref.Name, "classid . mark . "+address+" . inet_service"))
@@ -45,7 +48,7 @@ func nativeNAT64GrantSchema(schema *guardTableSchema, family string) {
 			continue
 		}
 		address := "ipv4_addr"
-		if ref.Name == "native_n64_from6_tcp" || ref.Name == "native_n64_from6_udp" {
+		if strings.Contains(ref.Name, "6_") {
 			address = "ipv6_addr"
 		}
 		schema.sets[ref.Name] = guardLeaseHeader(family, ref.Name, []string{"classid", "mark", address, "inet_service"})
@@ -162,6 +165,15 @@ func (transport *nativeNAT64Transport) projectGrants(
 					return nil, errors.New("firewall: NAT64 grant capacity exceeded")
 				}
 			}
+		}
+	}
+	targetValues, err := transport.projectTargetValues(ctx, logical, publication, utc, anchor)
+	if err != nil {
+		return nil, err
+	}
+	for name, rows := range targetValues {
+		for key, timeout := range rows {
+			values[name][key] = max(values[name][key], timeout)
 		}
 	}
 	commands := []change{}
@@ -372,17 +384,16 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 	if err != nil {
 		return err
 	}
-	inventory := []nativeSourceIP{}
+	inventories := map[bool][]nativeSourceIP{true: {}, false: {}}
 	indexes := map[nativeSourceIP]int{}
 	for index, address := range snapshot.Addresses {
-		if !address.Address.Is6() {
-			continue
-		}
 		identity := nativeSourceIP{nativeSourceIdentity: nativeSourceIdentity{iface: address.Interface, mac: address.MAC}, address: address.Address}
-		inventory = append(inventory, identity)
+		inventories[address.Address.Is6()] = append(inventories[address.Address.Is6()], identity)
 		indexes[identity] = index
 	}
-	slices.SortFunc(inventory, compareNativeIP)
+	for _, inventory := range inventories {
+		slices.SortFunc(inventory, compareNativeIP)
+	}
 	mapped := map[netip.Addr]bool{}
 	for _, transport := range transports {
 		for _, mapping := range transport.mappings {
@@ -402,6 +413,8 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 		if !slices.Contains(nativeNAT64GrantRefs(), objectReference{Family: element.Family, Table: element.Table, Name: element.Name}) {
 			continue
 		}
+		target := strings.HasPrefix(element.Name, "native_n64_to")
+		inventory := inventories[!target]
 		for _, raw := range element.Values {
 			var lease struct {
 				Value struct {
@@ -423,7 +436,7 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 			}
 			id := (high >> 3) | (channel & ownershipRuleMask)
 			if high&^nativeSourceMask != 0 || channel&ownershipEpochMask != snapshot.Epoch<<policy.OwnershipRuleBits ||
-				id == 0 || int(id) > len(inventory) || !mapped[inventory[id-1].address] {
+				id == 0 || int(id) > len(inventory) || !target && !mapped[inventory[id-1].address] {
 				return errors.New("firewall: prepared NAT64 grant changed its source episode")
 			}
 			index := indexes[inventory[id-1]]

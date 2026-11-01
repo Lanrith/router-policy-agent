@@ -184,6 +184,8 @@ func (transport *nativeNAT64Transport) definitions() []string {
 		fmt.Sprintf("map %s_token_channel { type mark : classid; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_token_origin { type mark : classid; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_export_channel { type classid : classid; size 65536; }", transport.name),
+		fmt.Sprintf("map %s_target_tokens { type classid . mark . ifname . ipv4_addr : classid; size 65536; }", transport.name),
+		fmt.Sprintf("set %s_target_highs { type classid . mark; size 65536; }", transport.name),
 		fmt.Sprintf("set %s_token_epoch_pairs { type mark . mark; size 65536; }", transport.name),
 	}
 	for index := range transport.sourceScopes {
@@ -428,12 +430,13 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 		name     string
 		datatype any
 		mapType  string
-	}{{"_tokens", []string{"mark", "mark", "classid"}, "classid"}, {"_token_epoch", "mark", "mark"}, {"_token_context", "mark", "mark"}, {"_token_channel", "mark", "classid"}, {"_token_origin", "mark", "classid"}, {"_export_channel", "classid", "classid"}} {
+	}{{"_tokens", []string{"mark", "mark", "classid"}, "classid"}, {"_token_epoch", "mark", "mark"}, {"_token_context", "mark", "mark"}, {"_token_channel", "mark", "classid"}, {"_token_origin", "mark", "classid"}, {"_export_channel", "classid", "classid"}, {"_target_tokens", []string{"classid", "mark", "ifname", "ipv4_addr"}, "classid"}} {
 		name := transport.name + item.name
 		header := guardSetHeader("inet", name, item.datatype, 65536)
 		header["map"] = item.mapType
 		schema.maps[name] = header
 	}
+	schema.sets[transport.name+"_target_highs"] = guardSetHeader("inet", transport.name+"_target_highs", []string{"classid", "mark"}, 65536)
 	epochPairs := guardSetHeader("inet", transport.name+"_token_epoch_pairs", []string{"mark", "mark"}, 65536)
 	schema.sets[transport.name+"_token_epoch_pairs"] = epochPairs
 	for _, leg := range transport.legs {

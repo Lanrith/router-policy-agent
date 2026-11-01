@@ -18,18 +18,22 @@ import (
 // injected IPv4 equivalent can reach the actual final-interface policy. The
 // test-only readiness object is synthetic; real TAYGA is qualified separately.
 func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
-	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, false)
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, false, false)
 }
 
 func TestKernelNamedNAT64WireSourceEpochAndAllocationScopes(t *testing.T) {
-	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, true, false)
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, true, false, false)
 }
 
 func TestKernelNamedNAT64WireLANOnlyPolicy(t *testing.T) {
-	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, true)
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, true, false)
 }
 
-func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, sourceOwned, lanOnly bool) {
+func TestKernelNamedNAT64WireTargetOwnership(t *testing.T) {
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, false, true)
+}
+
+func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, sourceOwned, lanOnly, targetOwned bool) {
 	t.Helper()
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
@@ -41,6 +45,9 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 	b.NetworkModel.ManagedNetworks = []policy.Role{}
 	if sourceOwned {
 		b.NetworkModel.ManagedNetworks = []policy.Role{b.Zones[0].Role}
+	}
+	if targetOwned {
+		b.NetworkModel.ManagedNetworks = []policy.Role{b.Zones[1].Role}
 	}
 	b.NAT64[0].SourceMappings = []policy.NAT64SourceMapping{{
 		Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10"), Ready: true}}
@@ -57,6 +64,12 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 	}
 	if lanOnly {
 		b.NetworkModel.Rules[2].To = []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.3.0/24")}}
+	}
+	if targetOwned {
+		// One mixed-family rule exercises rule/context zero and a target-owned
+		// epoch independent of the unclassified IPv6 caller's configuration.
+		b.NetworkModel.Rules = []policy.NetworkRule{b.NetworkModel.Rules[2]}
+		b.NetworkModel.Rules[0].To = []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.3.0/24")}}
 	}
 	layout, err := newNativeNAT64AccessLayout(ctx, b, "nat64-internal")
 	if err != nil {
@@ -107,6 +120,9 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 			Records: []binding.Record{{MAC: "02:00:00:00:00:10", NAS: "synthetic-nas", Interface: "lan10", VLAN: 10,
 				AssociatedAt: now, AssociationID: "nat64-wire-association", Addresses: []binding.Address{{IP: entries[0].Source,
 					Source: "qualified_ipv6", OwnershipID: "nat64-wire-address", ObservedAt: now, ValidUntil: now.Add(90 * time.Second)}}}}}
+		if targetOwned {
+			snapshot.Records = []binding.Record{{MAC: "02:00:00:00:00:13", NAS: "synthetic-nas", Interface: "lan13", VLAN: 13, AssociatedAt: now, AssociationID: "target-zero-association", Addresses: []binding.Address{{IP: netip.MustParseAddr("10.240.3.10"), Source: "kea_dhcp4", OwnershipID: "target-zero-address", ObservedAt: now, ValidUntil: now.Add(90 * time.Second)}}}}
+		}
 		ownership, err := compiler.CompileOwnership(ctx, snapshot, now, policy.CaptureAge())
 		if err != nil {
 			t.Fatal(err)
@@ -129,6 +145,9 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if targetOwned {
+		publishOwnership(t, 27)
 	}
 	if sourceOwned {
 		publishOwnership(t, 19)
@@ -171,6 +190,9 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 	serial := uint16(46000)
 	if lanOnly {
 		serial = 45000
+	}
+	if targetOwned {
+		serial = 44000
 	}
 	if sourceOwned {
 		serial = 47000
@@ -254,7 +276,7 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 
 		// Leave the exported tuple live without creating its IPv4 connection.
 		// The new registry reuses opaque IDs for a different authority epoch.
-		if sourceOwned {
+		if sourceOwned || targetOwned {
 			withdrawal, err := prepareNativeNAT64OwnershipClear(ctx, transport)
 			if err != nil {
 				t.Fatal(err)
@@ -262,7 +284,11 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 			executeGuardFixture(ctx, t, withdrawal.batch.data)
 			sources = nil
 			publishTokens(t)
-			publishOwnership(t, 21)
+			if targetOwned {
+				publishOwnership(t, 29)
+			} else {
+				publishOwnership(t, 21)
+			}
 		} else {
 			configuration, err = compiler.CompileOwnerConfiguration(ctx, 24)
 			if err != nil {

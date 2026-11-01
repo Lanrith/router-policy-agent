@@ -18,6 +18,7 @@ func channelListingFixture(configuration bool) (*guardTableObservation, *guardTa
 	} else {
 		inet.sets[mapping] = listedSet{Elements: []json.RawMessage{json.RawMessage(`[{"elem":{"val":7168,"timeout":85,"expires":84}},"0:1c00"]`)}}
 		netdev.sets[set] = listedSet{Elements: []json.RawMessage{json.RawMessage(`{"elem":{"val":"0:1c00","timeout":85,"expires":84}}`)}}
+		inet.sets[set] = listedSet{Elements: []json.RawMessage{json.RawMessage(`{"elem":{"val":"0:1c00","timeout":85,"expires":84}}`)}}
 	}
 	return inet, netdev
 }
@@ -64,6 +65,15 @@ func TestEpochChannelInspectionRejectsTransferredAndIncompleteGeneration(t *test
 				}
 				if err := inspectEpochChannel(t.Context(), configuration, inet, netdev); err == nil {
 					t.Fatal("physical epoch changed without its admitted origin")
+				}
+			})
+		}
+		if !configuration {
+			t.Run("missing inet ownership mirror", func(t *testing.T) {
+				inet, netdev := channelListingFixture(false)
+				delete(inet.sets, set)
+				if err := inspectEpochChannel(t.Context(), false, inet, netdev); err == nil {
+					t.Fatal("missing inet target epoch mirror accepted")
 				}
 			})
 		}

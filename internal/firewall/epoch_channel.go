@@ -25,7 +25,11 @@ func epochChannelDefinitions(configuration bool, family string) []string {
 		flags = " flags timeout; timeout 90s;"
 	}
 	if family == "inet" {
-		return []string{"map " + mapping + " { type mark : classid;" + flags + " size 1; }"}
+		definitions := []string{"map " + mapping + " { type mark : classid;" + flags + " size 1; }"}
+		if !configuration {
+			definitions = append(definitions, "set "+set+" { type classid;"+flags+" size 1; }")
+		}
+		return definitions
 	}
 	if family == "netdev" {
 		return []string{"set " + set + " { type classid;" + flags + " size 1; }"}
@@ -73,6 +77,9 @@ func epochChannelChanges(configuration bool, epoch uint32, timeout int) ([]any, 
 		map[string]any{"flush": map[string]any{"map": objectReference{Family: "inet", Table: ownedTable, Name: mapping}}},
 		map[string]any{"flush": map[string]any{"set": objectReference{Family: "netdev", Table: ownedTable, Name: set}}},
 	}
+	if !configuration {
+		operations = append(operations, map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: set}}})
+	}
 	if epoch == 0 && timeout == 0 {
 		return operations, nil
 	}
@@ -97,6 +104,11 @@ func epochChannelChanges(configuration bool, epoch uint32, timeout int) ([]any, 
 			"family": item.family, "table": ownedTable, "name": item.name, "elem": item.values,
 		}}})
 	}
+	if !configuration {
+		operations = append(operations, map[string]any{"add": map[string]any{"element": map[string]any{
+			"family": "inet", "table": ownedTable, "name": set, "elem": []any{value},
+		}}})
+	}
 	return operations, nil
 }
 
@@ -111,6 +123,13 @@ func inspectEpochChannel(ctx context.Context, configuration bool, inet, netdev *
 		values, err = listedGuardLeases(ctx, values)
 		if err != nil {
 			return err
+		}
+		priorityEpochs, err := listedGuardLeases(ctx, inet.sets[set].Elements)
+		if err != nil {
+			return err
+		}
+		if err := sameGuardElements(ctx, values, priorityEpochs); err != nil {
+			return errors.New("firewall: inet and physical ownership epochs differ")
 		}
 	}
 	bases := inet.sets[baseSet].Elements

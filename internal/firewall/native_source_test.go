@@ -265,7 +265,7 @@ func TestNativeSourcePreparationCannotSubstituteBytesForItsOwnershipProof(t *tes
 	var commands struct {
 		Commands []json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(revocation.batch.data, &commands); err != nil || len(commands.Commands) != 33 {
+	if err := json.Unmarshal(revocation.batch.data, &commands); err != nil || len(commands.Commands) != 34 {
 		t.Fatal("native withdrawal omitted its ownership, epoch or identity objects", err)
 	}
 }

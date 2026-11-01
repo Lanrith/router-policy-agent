@@ -27,7 +27,7 @@ func TestNAT64TupleTransportOwnsGeometryAndNeverGrantsAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := transport.chains()
-	if len(transport.legs) != 6 || len(transport.definitions()) != 24+len(transport.sourceScopes) {
+	if len(transport.legs) != 6 || len(transport.definitions()) != 26+len(transport.sourceScopes) {
 		t.Fatal("NAT64 transport omitted a direction, protocol or fixed collection")
 	}
 	for name, rules := range before {
@@ -80,7 +80,7 @@ func TestNAT64TupleTransportOwnsGeometryAndNeverGrantsAccess(t *testing.T) {
 		}
 	}
 	schema := transport.schema()
-	if len(schema.sets) != 4+len(transport.sourceScopes) || len(schema.maps) != 20 || !reflect.DeepEqual(schema.rules, nativeRulesExpressionsByChain(before)) {
+	if len(schema.sets) != 5+len(transport.sourceScopes) || len(schema.maps) != 21 || !reflect.DeepEqual(schema.rules, nativeRulesExpressionsByChain(before)) {
 		t.Fatal("NAT64 inspection schema differs from generated transport")
 	}
 	pending := schema.sets[transport.name+"_pending"]

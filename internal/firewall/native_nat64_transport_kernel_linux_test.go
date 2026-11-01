@@ -181,6 +181,7 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 	}
 	lines = append(lines, forward...)
 	lines = append(lines, "}", "}")
+	lines = append(lines, "table netdev "+ownedTable+" {", "map "+transport.name+"_target_origins { type mark . classid : classid; size 65536; }", "}")
 	lines = append(lines, `table netdev n64_identity_endpoints {
  chain peer_endpoint {type filter hook ingress device "peer0" priority 0;policy drop;}
  chain device_endpoint {type filter hook ingress device "device0" priority 0;policy drop;}
@@ -204,7 +205,7 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 		if t.Failed() {
 			logNAT64IdentityFixture(cleanup, t)
 		}
-		packetNft(cleanup, t, "delete table inet "+ownedTable+";delete table netdev n64_identity_endpoints")
+		packetNft(cleanup, t, "delete table inet "+ownedTable+";delete table netdev "+ownedTable+";delete table netdev n64_identity_endpoints")
 	})
 	readiness := startNAT64IdentityTranslator(ctx, t, b.NAT64[0], transport, allocations)
 	peer, device := packetSocket(t, "peer0"), packetSocket(t, "device0")

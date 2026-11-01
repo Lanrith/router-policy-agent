@@ -91,7 +91,7 @@ func nativeTranslationFacts(ctx context.Context) (map[string][]nativeScope, erro
 	const prefix = "native_translation_facts"
 	chains := map[string][]nativeScope{}
 	bits := nativeFactBits()
-	originals := []uint64{0xd1000000, 0xd3000000, 0xd5000000, 0xf1000000, 0xf3000000, 0xf5000000}
+	originals := []uint64{0xd1000000, 0xd3000000, 0xd5000000, 0xd7000000, 0xd9000000, 0xf1000000, 0xf3000000, 0xf5000000}
 	// Explicit alternatives preserve the selected metadata namespace.
 	for _, tag := range originals {
 		chains[prefix+"_capture"] = append(chains[prefix+"_capture"], nativeJoin(

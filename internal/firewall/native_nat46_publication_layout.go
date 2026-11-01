@@ -18,6 +18,25 @@ func (layout *guardLayout) nat46Sources() *nativeNAT46StaticSources {
 // supply no hooks or packet permissions. The ordinary native constructor still
 // rejects translation, pending the complete floor and translator integration.
 func (layout *guardLayout) nat46PublicationDefinitions(ctx context.Context, family string) ([]string, error) {
+	var transports []*nativeNAT64Transport
+	if layout != nil && layout.native != nil {
+		transports = layout.native.selectedNAT64Transports()
+	}
+	if family == "netdev" {
+		definitions := []string{}
+		for _, transport := range transports {
+			definitions = append(definitions, "map "+transport.name+"_target_origins { type mark . classid : classid; size 65536; }")
+		}
+		if len(transports) != 0 {
+			// These definitions are appended below alongside any NAT46 geometry.
+			base, err := layout.nat46BasePublicationDefinitions(ctx, family)
+			return append(base, definitions...), err
+		}
+	}
+	return layout.nat46BasePublicationDefinitions(ctx, family)
+}
+
+func (layout *guardLayout) nat46BasePublicationDefinitions(ctx context.Context, family string) ([]string, error) {
 	sources := layout.nat46Sources()
 	var transports []*nativeNAT64Transport
 	if layout != nil && layout.native != nil {
@@ -61,6 +80,13 @@ func (layout *guardLayout) nat46PublicationSchema(ctx context.Context, schema *g
 	var transports []*nativeNAT64Transport
 	if layout != nil && layout.native != nil {
 		transports = layout.native.selectedNAT64Transports()
+	}
+	if family == "netdev" {
+		for _, transport := range transports {
+			header := guardSetHeader("netdev", transport.name+"_target_origins", []string{"mark", "classid"}, 65536)
+			header["map"] = "classid"
+			schema.maps[transport.name+"_target_origins"] = header
+		}
 	}
 	if sources == nil {
 		if len(transports) != 0 {

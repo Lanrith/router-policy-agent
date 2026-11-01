@@ -210,12 +210,32 @@ independent; only connectivity demand and raw carrier admission share branches.
 The real-TAYGA fixtures exercise different WAN/LAN winning rules and a LAN
 directory permission beside a WAN owner permission. Directory withdrawal and
 expiry deny the LAN flow while existing and new WAN owner flows continue. Their
-IPv6 ownership receipt and translator readiness are synthetic. Configuration
-authority cannot replace a classified or managed destination's ownership: those
-configuration-origin paths remain closed until an independent target authority
-channel is implemented. Managed destination grants, actual IPv6 ownership
-production, WAN source NAT and complete image activation remain under
-qualification.
+IPv6 ownership receipt and translator readiness are synthetic.
+
+An unclassified IPv6 caller can now reach a currently owned IPv4 target through
+a separate target-authority channel. Owner permission still requires the target's
+current address, interface, MAC and ownership epoch. Directory permission also
+requires a fresh, exact target grant; TCP and UDP grants remain separate.
+The compiler's reviewed source mapping binds the IPv4 caller alias to its
+original IPv6 address. A pool address by itself supplies no caller identity.
+
+Target lookup and return tokens are derived from the original ownership receipt
+and immutable access graph, including the translator's global/private target
+class. They retain the raw source configuration epoch
+separately from the target's ownership epoch. Target ownership must follow the
+configuration in the helper's durable sequence. Physical egress first checks
+current target authority and any grant, then checks the independently bound
+configuration epoch. Return egress also checks the original client interface
+and MAC class. A confirmed wire connection cannot acquire a newer target epoch.
+Token and allocation publication withdraw target lookups, physical origin maps
+and all twelve tuple proofs together. The required native fixture includes rule/context zero and
+stale tuple withdrawal; real-TAYGA fixtures cover both target authorization modes.
+
+These fixtures use synthetic ownership and source readiness. Target-grant
+selection for already owned IPv6 callers, grants using dynamic source aliases
+and IPv4-initiated callbacks through NAT64 source aliases still require
+implementation and qualification. Actual IPv6 ownership production, WAN source
+NAT, correlated errors and complete image activation remain unqualified.
 
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection

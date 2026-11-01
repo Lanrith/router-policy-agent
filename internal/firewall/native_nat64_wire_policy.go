@@ -48,9 +48,9 @@ func (access *nativeAccess) compileNAT64WirePolicy(ctx context.Context, transpor
 							if authorization == "inherit" && (slices.Contains(access.managed, group.iface) || slices.Contains(access.managed, path.iface)) {
 								authorization = "directory"
 							}
-							decision := fmt.Sprintf("%s_rule_%d", branch, index)
+							decision := fmt.Sprintf("%s_%d_rule_%d_%s_%t", entry, groupIndex, index, authorization, slices.Contains(access.managed, path.iface))
 							if _, exists := access.inet[decision]; !exists {
-								access.compileNAT64WireDecision(decision, index, authorization, reply, slices.Contains(access.managed, path.iface), group.ids)
+								access.compileNAT64WireDecision(transport, decision, index, authorization, reply, slices.Contains(access.managed, path.iface), group.ids)
 							}
 							access.add(branch, scope, nativeVerdict("goto", decision))
 						}
@@ -94,20 +94,27 @@ func (access *nativeAccess) nat64ContextGroups(transport *nativeNAT64Transport) 
 
 // The final IPv4 route selects permission. Only a private unconfirmed wire
 // connection may bind its actual rule; raw source provenance is held separately.
-func (access *nativeAccess) compileNAT64WireDecision(chain string, index int, authorization string, reply, targetManaged bool, ids []uint64) {
+func (access *nativeAccess) compileNAT64WireDecision(transport *nativeNAT64Transport, chain string, index int, authorization string, reply, targetManaged bool, ids []uint64) {
 	bound := chain + "_bound"
-	// Configuration authority cannot stand in for a classified target's
-	// independently current ownership epoch. A target-owned authorization
-	// channel must be bound before these flows can use an owner permission.
+	target := access.compileNAT64TargetDecision(transport, index, authorization, reply)
+	access.add(chain+"_target", nativeVerdict("jump", target))
+	access.add(chain+"_target", nativeVerdict("goto", bound))
+	for _, directory := range []bool{false, true} {
+		access.add(chain, nativeMark(0xff000000, nativeNAT64TargetTag(directory, reply)), nativeVerdict("goto", chain+"_target"))
+	}
 	configuration := nativeMark(0xff000000, nativeTag(true, reply))
-	if targetManaged {
-		access.add(chain, configuration, nativeVerdict("drop", ""))
+	targetVerdict := []nativeScope{nativeVerdict("goto", chain+"_target")}
+	if reply {
+		targetVerdict = []nativeScope{nativeVerdict("drop", "")}
+	}
+	if targetManaged || authorization == "directory" {
+		access.add(chain, append([]nativeScope{configuration}, targetVerdict...)...)
 	} else {
 		peer := "daddr"
 		if reply {
 			peer = "saddr"
 		}
-		access.add(chain, configuration, nativeMatch("ip "+peer+" @"+classified4Set, guardPayload("ip", peer), "@"+classified4Set), nativeVerdict("drop", ""))
+		access.add(chain, append([]nativeScope{configuration, nativeMatch("ip "+peer+" @"+classified4Set, guardPayload("ip", peer), "@"+classified4Set)}, targetVerdict...)...)
 	}
 	if authorization == "directory" && !reply {
 		for _, kind := range []uint64{nativeTag(false, false), nativeDirectoryTag(false)} {

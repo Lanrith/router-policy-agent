@@ -73,13 +73,14 @@ func (prepared *preparedNAT64Allocations) expectedData(ctx context.Context) ([]b
 		operations = append(operations, map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: prepared.transport.sourceScopeName(index)}}})
 	}
 	tokenNames := (&nativeNAT64Tokens{transport: prepared.transport}).names()
-	for index, name := range tokenNames {
+	for _, name := range tokenNames {
 		kind := "map"
-		if index == len(tokenNames)-1 {
+		if (&nativeNAT64Tokens{transport: prepared.transport}).objectKind(name) == "set" {
 			kind = "set"
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
 	}
+	operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{Family: "netdev", Table: ownedTable, Name: prepared.transport.name + "_target_origins"}}})
 	operations = append(operations, prepared.transport.tupleProofClears()...)
 	if len(rows[prepared.transport.name+"_zones"]) != 0 {
 		operations = append(operations,
@@ -219,13 +220,14 @@ func nat64AllocationClearData(ctx context.Context, transport *nativeNAT64Transpo
 		operations = append(operations, map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: transport.sourceScopeName(index)}}})
 	}
 	tokenNames := (&nativeNAT64Tokens{transport: transport}).names()
-	for index, name := range tokenNames {
+	for _, name := range tokenNames {
 		kind := "map"
-		if index == len(tokenNames)-1 {
+		if (&nativeNAT64Tokens{transport: transport}).objectKind(name) == "set" {
 			kind = "set"
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
 	}
+	operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{Family: "netdev", Table: ownedTable, Name: transport.name + "_target_origins"}}})
 	operations = append(operations, transport.tupleProofClears()...)
 	return json.Marshal(map[string]any{"nftables": operations})
 }
