@@ -14,11 +14,12 @@ const (
 	maximumNAT64Tokens  = 65535
 )
 
-// nativeNAT64TokenState is an already admitted immutable packet identity. It
-// is produced by the native policy compiler/publication path, never decoded
+// nativeNAT64TokenState identifies source connectivity or a selected wire
+// authorization. It is produced by the native compiler/publication path, never decoded
 // from a deployed manifest or supplied by a policy reader.
 type nativeNAT64TokenState struct {
 	epoch, context, channel uint32
+	origin                  uint32
 }
 
 type nativeNAT64TokenEntry struct {
@@ -50,12 +51,25 @@ func newNativeNAT64Tokens(ctx context.Context, transport *nativeNAT64Transport, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if index != 0 && state == owned[index-1] || !validNativeNAT64TokenState(state, transport.ruleCount) {
+		if index != 0 && sameNAT64TokenKey(state, owned[index-1]) || !validNativeNAT64TokenState(state, transport.ruleCount) {
 			return nil, errors.New("firewall: invalid or duplicate NAT64 token state")
 		}
 		entries = append(entries, nativeNAT64TokenEntry{nativeNAT64TokenState: state, token: nativeNAT64TokenTag | uint32(index+1)}) // #nosec G115 -- count is bounded above.
 	}
 	return &nativeNAT64Tokens{transport: transport, entries: entries}, ctx.Err()
+}
+
+// A zero explicit origin preserves the ordinary same-rule representation.
+// Different final rules retain their compiler-derived raw connection marker.
+func (state nativeNAT64TokenState) originMarker() uint32 {
+	if state.origin != 0 {
+		return state.origin
+	}
+	return state.epoch
+}
+
+func sameNAT64TokenKey(first, second nativeNAT64TokenState) bool {
+	return first.epoch == second.epoch && first.context == second.context && first.channel == second.channel
 }
 
 func compareUint32(first, second uint32) int {
@@ -77,7 +91,8 @@ func validNativeNAT64TokenState(state nativeNAT64TokenState, ruleCount int) bool
 		validKind = validKind || kind == expected
 	}
 	return epochBase != 0 && state.epoch>>policy.OwnershipRuleBits <= policy.MaximumOwnershipEpoch && int(rule) < ruleCount &&
-		state.context&^nativeFactsMask == 0 && validKind && state.channel&ownershipEpochMask == epochBase
+		state.context&^nativeFactsMask == 0 && validKind && state.channel&ownershipEpochMask == epochBase &&
+		state.originMarker()&ownershipEpochMask == epochBase && int(state.originMarker()&ownershipRuleMask) < ruleCount
 }
 
 func (tokens *nativeNAT64Tokens) data(ctx context.Context) ([]byte, error) {
@@ -166,9 +181,9 @@ func (tokens *nativeNAT64Tokens) elements(ctx context.Context) (map[string][]jso
 			[]any{entry.token, state.epoch},
 			[]any{entry.token, state.context},
 			[]any{entry.token, epochClassID(state.channel)},
-			[]any{entry.token, epochClassID(state.epoch)},
+			[]any{entry.token, epochClassID(state.originMarker())},
 			[]any{epochClassID(entry.token), epochClassID(state.channel)},
-			map[string]any{"concat": []any{state.epoch, entry.token}},
+			map[string]any{"concat": []any{state.originMarker(), entry.token}},
 		}
 		for index, value := range values {
 			encoded, err := json.Marshal(value)
@@ -196,7 +211,7 @@ func (tokens *nativeNAT64Tokens) validate() error {
 	}
 	for index, entry := range tokens.entries {
 		if !validNativeNAT64TokenState(entry.nativeNAT64TokenState, tokens.transport.ruleCount) ||
-			entry.token != nativeNAT64TokenTag|uint32(index+1) || index != 0 && compareNAT64TokenState(tokens.entries[index-1].nativeNAT64TokenState, entry.nativeNAT64TokenState) >= 0 { // #nosec G115 -- count is bounded above.
+			entry.token != nativeNAT64TokenTag|uint32(index+1) || index != 0 && (compareNAT64TokenState(tokens.entries[index-1].nativeNAT64TokenState, entry.nativeNAT64TokenState) >= 0 || sameNAT64TokenKey(tokens.entries[index-1].nativeNAT64TokenState, entry.nativeNAT64TokenState)) { // #nosec G115 -- count is bounded above.
 			return errors.New("firewall: changed NAT64 token registry")
 		}
 	}
@@ -210,7 +225,10 @@ func compareNAT64TokenState(first, second nativeNAT64TokenState) int {
 	if first.context != second.context {
 		return compareUint32(first.context, second.context)
 	}
-	return compareUint32(first.channel, second.channel)
+	if first.channel != second.channel {
+		return compareUint32(first.channel, second.channel)
+	}
+	return compareUint32(first.originMarker(), second.originMarker())
 }
 
 func prepareNativeNAT64TokenClear(ctx context.Context, transport *nativeNAT64Transport) (*nativeNAT64Tokens, error) {

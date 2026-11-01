@@ -144,9 +144,15 @@ retains the original source interface, IPv6 range, MAC, protocol, ports and rule
 indices. Identical raw programs share a request chain. The result only records
 bounded pending demand: owner and directory candidates still gain no forwarding
 permission without the independent allocation, epoch, identity and tuple checks.
-On an imported IPv4 leg, the helper re-evaluates the ordered rules against the
-actual final interface and destination. The imported rule index must agree with
-that decision. Original source MAC/interface classes remain bound to the token;
+Raw IPv6 admission binds source connectivity to the selected translator; it
+does not choose the final destination permission. A directory candidate can
+reach that boundary without a current grant, but cannot pass the IPv4 wire
+guard without one. On the imported IPv4 leg, the helper evaluates the ordered
+rules against the actual final interface and destination. Only a private,
+unconfirmed connection with an empty marker may bind the winning wire rule.
+Later packets must retain that rule and its current authority epoch. A matching
+deny or missing directory grant terminates evaluation rather than falling
+through to a wider permit. Original source MAC/interface classes remain bound to the token;
 timed IPv4 memberships preserve the original IPv6 source ranges. The privileged
 writer derives those memberships from the original allocation ledger and live
 translator proof, and replaces or clears them with the other allocation state.
@@ -192,9 +198,21 @@ proofs must be rejected within their original two-second lifetime.
 The translator attachment's source floor permits only its IPv4 pool and IPv6
 translation prefix. WAN source validation rejects both ranges. These checks
 grant no access independently of allocation, policy, epochs and tuple proofs.
-Flows whose permitted rules differ between final interfaces still require
-per-interface tuple exports. Managed destination grants and WAN source NAT also
-remain under qualification.
+Separate final interfaces can select different rules while retaining the raw
+connection's immutable source marker. The token registry binds both markers
+without allowing two origins for one lookup key. Physical raw admission shares
+interface/MAC programs while retaining the exact winning source context and all
+source-floor checks; it does not raise the compiler's rule capacity.
+
+The real-TAYGA fixtures exercise different WAN/LAN winning rules and a LAN
+directory permission beside a WAN owner permission. Directory withdrawal and
+expiry deny the LAN flow while existing and new WAN owner flows continue. Their
+IPv6 ownership receipt and translator readiness are synthetic. Configuration
+authority cannot replace a classified or managed destination's ownership: those
+configuration-origin paths remain closed until an independent target authority
+channel is implemented. Managed destination grants, actual IPv6 ownership
+production, WAN source NAT and complete image activation remain under
+qualification.
 
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection

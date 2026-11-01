@@ -198,3 +198,39 @@ func TestNAT64TokenRegistryRejectsUnownedOrIncoherentMetadata(t *testing.T) {
 		t.Fatal("cancelled NAT64 token revocation continued", err)
 	}
 }
+
+func TestNAT64TokenRegistryRetainsIndependentOriginAndRejectsAmbiguousKeys(t *testing.T) {
+	t.Parallel()
+	transport, states := nat64TokenFixture(t)
+	selected := states[0]
+	selected.origin = 0x1c00
+	tokens, err := newNativeNAT64Tokens(t.Context(), transport, []nativeNAT64TokenState{selected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tokens.elements(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, expected := range map[string]any{
+		transport.name + "_token_origin":      []any{tokens.entries[0].token, epochClassID(selected.origin)},
+		transport.name + "_token_epoch_pairs": map[string]any{"concat": []any{selected.origin, tokens.entries[0].token}},
+	} {
+		encoded, err := json.Marshal(expected)
+		if err != nil || len(rows[name]) != 1 || !bytes.Equal(rows[name][0], encoded) {
+			t.Fatal("actual wire rule replaced its independent raw origin", name, err)
+		}
+	}
+	conflict := selected
+	conflict.origin = 0x1c02
+	if _, err := newNativeNAT64Tokens(t.Context(), transport, []nativeNAT64TokenState{selected, conflict}); err == nil {
+		t.Fatal("one wire-token key acquired two original connection markers")
+	}
+	for _, origin := range []uint32{0x2000, 0x1fff} {
+		invalid := selected
+		invalid.origin = origin
+		if _, err := newNativeNAT64Tokens(t.Context(), transport, []nativeNAT64TokenState{invalid}); err == nil {
+			t.Fatal("foreign epoch or unknown original rule entered the registry")
+		}
+	}
+}

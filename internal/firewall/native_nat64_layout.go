@@ -90,8 +90,7 @@ func (access *nativeAccess) compileNAT64(ctx context.Context) error {
 		if err := mergeNativeChains(access.inet, transport.chains()); err != nil {
 			return err
 		}
-		projected, err := nativeNAT64ProjectedRules(ctx, access.ruleSet, transport)
-		if err != nil {
+		if err := access.compileNAT64CarrierContexts(ctx, transport); err != nil {
 			return err
 		}
 		if err := access.compileNAT64Requests(ctx, transport); err != nil {
@@ -101,7 +100,7 @@ func (access *nativeAccess) compileNAT64(ctx context.Context) error {
 			return err
 		}
 		access.inet["native_n64_zone"] = append(access.inet["native_n64_zone"], transport.zoneRules()...)
-		if err := access.compileNAT64RawOrder(ctx, projected, transport); err != nil {
+		if err := access.compileNAT64RawOrder(ctx, transport); err != nil {
 			return err
 		}
 	}
@@ -164,23 +163,16 @@ func (access *nativeAccess) compileNAT64Requests(
 	return ctx.Err()
 }
 
-func (access *nativeAccess) compileNAT64RawOrder(ctx context.Context, projected *nativeRuleSet, transport *nativeNAT64Transport) error {
+func (access *nativeAccess) compileNAT64RawOrder(ctx context.Context, transport *nativeNAT64Transport) error {
+	paths, err := nativeNAT64EgressPolicies(ctx, access.ruleSet, transport)
+	if err != nil {
+		return err
+	}
+	if err := access.compileNAT64Carrier(ctx, transport, paths); err != nil {
+		return err
+	}
 	for _, hook := range []string{"guard_forward", "permit_flow"} {
 		name := transport.name + "_ordered_" + hook
-		for index, rule := range projected.rules {
-			scopes, err := projected.scopes(ctx, index, false, false)
-			if err != nil {
-				return err
-			}
-			for _, scope := range scopes {
-				verdict := nativeVerdict("drop", "")
-				if rule.Action == "allow" {
-					verdict = nativeVerdict("goto", "native_"+strconv.Itoa(index)+"_"+hook+"_original")
-				}
-				access.add(name, scope, verdict)
-			}
-		}
-		access.add(name, nativeVerdict("drop", ""))
 		geometry := nativeJoin(nativeInterface("oifname", transport.component),
 			nativeMatch("ip6 daddr "+transport.prefix.String(), guardPayload("ip6", "daddr"), controllerPrefix(transport.prefix)))
 		dispatch := []nativeScope{nativeJoin(geometry, nativeVerdict("goto", name))}
@@ -195,35 +187,6 @@ func (access *nativeAccess) compileNAT64RawOrder(ctx context.Context, projected 
 			return errors.New("firewall: NAT64 ordered dispatch lost mandatory deny boundary")
 		}
 		access.inet[hook] = slices.Insert(access.inet[hook], position, dispatch...)
-	}
-	// Rule order is part of the immutable profile. access.contexts is a map for
-	// indexed lookup, so ranging over it would make otherwise identical image
-	// builds emit different physical guard order.
-	for index := range access.ruleSet.rules {
-		contexts := access.contexts[index]
-		if projected.rules[index].Action != "allow" || len(projected.rules[index].From) == 0 {
-			continue
-		}
-		for _, packet := range contexts {
-			scopes, err := projected.physicalScopes(ctx, index, packet, false, false)
-			if err != nil {
-				return err
-			}
-			if len(scopes) == 0 {
-				continue
-			}
-			chain := transport.name + "_physical_" + strconv.FormatUint(packet.id, 10) + "_original"
-			if _, exists := access.netdev[chain]; !exists {
-				if err := access.compilePhysicalOrder(ctx, projected, chain, packet.iface, packet.mac, false); err != nil {
-					return err
-				}
-			}
-			kinds := nativePhysicalKinds(projected.rules[index].Authorization, false, []uint64{packet.id})
-			for _, scope := range scopes {
-				access.netdev["native_scope_gate"] = slices.Insert(access.netdev["native_scope_gate"], 0,
-					nativeJoin(kinds, scope, nativeVerdict("goto", chain)))
-			}
-		}
 	}
 	// Correlation maps and their import chains live in the inet table, so the
 	// export must live there too. Priority 201 is after the mandatory egress

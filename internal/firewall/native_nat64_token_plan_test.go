@@ -94,7 +94,7 @@ func TestNAT64TokensAreDerivedFromCompilerOwnedConfigurationAndSources(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tokens.entries) != 6 {
+	if len(tokens.entries) != 5 {
 		t.Fatal("NAT64 registry omitted a compiler-valid owner, configuration, or directory state", len(tokens.entries))
 	}
 	kinds := []uint32{}
@@ -102,7 +102,7 @@ func TestNAT64TokensAreDerivedFromCompilerOwnedConfigurationAndSources(t *testin
 		kinds = append(kinds, entry.context&0xff000000)
 	}
 	slices.Sort(kinds)
-	if !slices.Equal(kinds, []uint32{0xd1000000, 0xd2000000, 0xd3000000, 0xd4000000, 0xd5000000, 0xd6000000}) {
+	if !slices.Equal(kinds, []uint32{0xd1000000, 0xd2000000, 0xd3000000, 0xd4000000, 0xd6000000}) {
 		t.Fatal("NAT64 registry changed its independently checked authorization classes", kinds)
 	}
 	data, err := tokens.publicationData(t.Context())
@@ -121,7 +121,7 @@ func TestNAT64TokensAreDerivedFromCompilerOwnedConfigurationAndSources(t *testin
 	}
 }
 
-func TestNAT64TokenDerivationRepresentsNoPermitAsTypedRevocation(t *testing.T) {
+func TestNAT64DirectoryCandidateCarriesNoFinalPermissionWithoutSources(t *testing.T) {
 	t.Parallel()
 	b := nat64TransportFixture(t)
 	b.NetworkModel.Rules = []policy.NetworkRule{{
@@ -158,12 +158,12 @@ func TestNAT64TokenDerivationRepresentsNoPermitAsTypedRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tokens.clear || len(tokens.entries) != 0 || tokens.origin != nil {
-		t.Fatal("directory-only NAT64 without a current source was not represented as an explicit token revocation")
+	if tokens.clear || len(tokens.entries) != 1 || uint64(tokens.entries[0].context&0xff000000) != nativeTag(true, false) {
+		t.Fatal("directory-only NAT64 did not retain only source connectivity without final permission")
 	}
 	data, err := tokens.publicationData(t.Context())
-	if err != nil || bytes.Contains(data, []byte(`"add"`)) {
-		t.Fatal("zero-permit NAT64 token plan was not a valid clear-only publication", err)
+	if err != nil || !bytes.Contains(data, []byte(`"add"`)) {
+		t.Fatal("source connectivity registry did not retain its original compiler proof", err)
 	}
 }
 

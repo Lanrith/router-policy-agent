@@ -324,8 +324,9 @@ func (leg nativeNAT64Leg) allocation(transport *nativeNAT64Transport, imported b
 	return nativeMatch(text, guardPayload("ip", addressField), "@"+transport.name+"_active_aliases")
 }
 
-// Transport import replaces only packet metadata, and initializes a new IPv4
-// connection's epoch from the fresh exact export. Confirmed epochs are retained.
+// Transport import restores source provenance and packet metadata. The actual
+// final-interface policy alone binds a new IPv4 authorization marker; imports
+// never rewrite confirmed connection markers.
 // Current ownership, allocation publication, ordered policy and grants must be
 // checked by the caller independently before and after this correlation.
 func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
@@ -374,11 +375,9 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 				chains[continuation] = append(chains[continuation], nativeJoin(
 					nativeMangle("meta priority set meta mark map @"+transport.name+"_token_channel", guardMeta("priority"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_channel"}}),
 					nativeVerdict("goto", channelStage)), nativeVerdict("drop", ""))
-				expectedEpoch := map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_epoch"}}
-				chains[channelStage] = []nativeScope{
-					nativeJoin(nativeMatch("ct mark 0", nativeCT("mark"), 0), nativeState("new"),
-						nativeMangle("ct mark set meta mark map @"+transport.name+"_token_epoch", nativeCT("mark"), expectedEpoch)),
-					nativeVerdict("goto", epochStage),
+				chains[channelStage] = []nativeScope{nativeVerdict("goto", contextStage)}
+				if leg.reply {
+					chains[channelStage] = []nativeScope{nativeVerdict("goto", epochStage)}
 				}
 				epochPair := map[string]any{"concat": []any{nativeCT("mark"), guardMeta("mark")}}
 				chains[epochStage] = []nativeScope{

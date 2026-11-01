@@ -165,6 +165,11 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 			}
 			lines = append(lines, "jump "+leg.name+"_"+operation)
 			if imported {
+				if !leg.reply {
+					// The synthetic admission caller now binds its actual wire
+					// rule; tuple import supplies only original provenance.
+					lines = append(lines, "ct mark 0 ct status confirmed drop", "ct mark 0 ct state new ct mark set 0x1c00")
+				}
 				lines = append(lines, "jump check_import")
 				if !leg.reply {
 					lines = append(lines, "ct zone != 0 drop", "jump native_translation_facts_capture")

@@ -13,7 +13,8 @@ import (
 
 type nativeNAT64WireContext struct {
 	nativeSourceIdentity
-	ids []uint64
+	ids   []uint64
+	rules map[int][]uint64
 }
 
 // The imported token identifies the original source interface/MAC class and
@@ -25,26 +26,7 @@ func (access *nativeAccess) compileNAT64WirePolicy(ctx context.Context, transpor
 	if err != nil {
 		return err
 	}
-	groups := []nativeNAT64WireContext{}
-	indices := map[nativeSourceIdentity]int{}
-	for index, rule := range access.ruleSet.rules {
-		if !nativeNAT64RuleEligible(rule, transport) {
-			continue
-		}
-		for _, packet := range access.contexts[index] {
-			if packet.family != 0 && packet.family != 6 || packet.source != nil {
-				continue
-			}
-			identity := nativeSourceIdentity{iface: packet.iface, mac: packet.mac}
-			position, found := indices[identity]
-			if !found {
-				position = len(groups)
-				indices[identity] = position
-				groups = append(groups, nativeNAT64WireContext{nativeSourceIdentity: identity})
-			}
-			groups[position].ids = append(groups[position].ids, packet.id)
-		}
-	}
+	groups := access.nat64ContextGroups(transport)
 	for _, reply := range []bool{false, true} {
 		direction, field := "original", "oifname"
 		if reply {
@@ -66,11 +48,13 @@ func (access *nativeAccess) compileNAT64WirePolicy(ctx context.Context, transpor
 							if authorization == "inherit" && (slices.Contains(access.managed, group.iface) || slices.Contains(access.managed, path.iface)) {
 								authorization = "directory"
 							}
-							access.add(branch, scope,
-								nativeMatch(fmt.Sprintf("ct mark & %#x == %d", ownershipRuleMask, index), guardBinary("&", nativeCT("mark"), ownershipRuleMask), index),
-								nativePhysicalKinds(authorization, reply, group.ids), nativeVerdict("return", ""))
+							decision := fmt.Sprintf("%s_rule_%d", branch, index)
+							if _, exists := access.inet[decision]; !exists {
+								access.compileNAT64WireDecision(decision, index, authorization, reply, slices.Contains(access.managed, path.iface), group.ids)
+							}
+							access.add(branch, scope, nativeVerdict("goto", decision))
 						}
-						// A matching deny, different original rule or insufficient
+						// A matching deny, conflicting connection rule or insufficient
 						// authorization terminates here; no wider later rule applies.
 						access.add(branch, scope, nativeVerdict("drop", ""))
 					}
@@ -81,6 +65,74 @@ func (access *nativeAccess) compileNAT64WirePolicy(ctx context.Context, transpor
 		access.add(entry, nativeVerdict("drop", ""))
 	}
 	return ctx.Err()
+}
+
+func (access *nativeAccess) nat64ContextGroups(transport *nativeNAT64Transport) []nativeNAT64WireContext {
+	groups := []nativeNAT64WireContext{}
+	indices := map[nativeSourceIdentity]int{}
+	for index, rule := range access.ruleSet.rules {
+		if !nativeNAT64RuleEligible(rule, transport) {
+			continue
+		}
+		for _, packet := range access.contexts[index] {
+			if packet.family != 0 && packet.family != 6 || packet.source != nil {
+				continue
+			}
+			identity := nativeSourceIdentity{iface: packet.iface, mac: packet.mac}
+			position, found := indices[identity]
+			if !found {
+				position = len(groups)
+				indices[identity] = position
+				groups = append(groups, nativeNAT64WireContext{nativeSourceIdentity: identity, rules: map[int][]uint64{}})
+			}
+			groups[position].ids = append(groups[position].ids, packet.id)
+			groups[position].rules[index] = append(groups[position].rules[index], packet.id)
+		}
+	}
+	return groups
+}
+
+// The final IPv4 route selects permission. Only a private unconfirmed wire
+// connection may bind its actual rule; raw source provenance is held separately.
+func (access *nativeAccess) compileNAT64WireDecision(chain string, index int, authorization string, reply, targetManaged bool, ids []uint64) {
+	bound := chain + "_bound"
+	// Configuration authority cannot stand in for a classified target's
+	// independently current ownership epoch. A target-owned authorization
+	// channel must be bound before these flows can use an owner permission.
+	configuration := nativeMark(0xff000000, nativeTag(true, reply))
+	if targetManaged {
+		access.add(chain, configuration, nativeVerdict("drop", ""))
+	} else {
+		peer := "daddr"
+		if reply {
+			peer = "saddr"
+		}
+		access.add(chain, configuration, nativeMatch("ip "+peer+" @"+classified4Set, guardPayload("ip", peer), "@"+classified4Set), nativeVerdict("drop", ""))
+	}
+	if authorization == "directory" && !reply {
+		for _, kind := range []uint64{nativeTag(false, false), nativeDirectoryTag(false)} {
+			access.add(chain, nativeMark(0xff000000, kind), nativeStampKind(nativeDirectoryTag(false)), nativeVerdict("goto", bound))
+		}
+	} else {
+		access.add(chain, nativePhysicalKinds(authorization, reply, ids), nativeVerdict("goto", bound))
+	}
+	access.add(chain, nativeVerdict("drop", ""))
+	if !reply {
+		access.add(bound, nativeMatch("ct mark 0", nativeCT("mark"), 0),
+			nativeScope{text: "ct status confirmed", expressions: []any{map[string]any{"match": map[string]any{
+				"op": "in", "left": nativeCT("status"), "right": "confirmed",
+			}}}}, nativeVerdict("drop", ""))
+		stamp := []nativeScope{nativeMatch("ct mark 0", nativeCT("mark"), 0), nativeState("new"),
+			nativeMangle("ct mark set meta priority & 0xfffffc00", nativeCT("mark"), guardBinary("&", guardMeta("priority"), "ffff:fc00"))}
+		if index != 0 {
+			stamp = append(stamp, nativeMangle(fmt.Sprintf("ct mark set ct mark | %d", index), nativeCT("mark"), guardBinary("|", nativeCT("mark"), index)))
+		}
+		access.add(bound, stamp...)
+	}
+	access.add(bound, nativeMatch(fmt.Sprintf("ct mark & %#x == %d", ownershipRuleMask, index), guardBinary("&", nativeCT("mark"), ownershipRuleMask), index), nativeVerdict("goto", bound+"_epoch"))
+	access.add(bound, nativeVerdict("drop", ""))
+	access.add(bound+"_epoch", nativeVerdict("jump", "native_translation_facts_epoch"))
+	access.add(bound+"_epoch", nativeVerdict("return", ""))
 }
 
 func nativeNAT64WireContextIDs(ids []uint64) nativeScope {

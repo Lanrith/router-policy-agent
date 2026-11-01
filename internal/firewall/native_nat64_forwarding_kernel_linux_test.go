@@ -19,39 +19,52 @@ import (
 // exact tuple correlation and a real TAYGA process. Configuration and dynamic
 // source ownership are separate modes so each can be revoked independently.
 func TestKernelNamedNAT64JoinedTAYGAConfiguration(t *testing.T) {
-	testKernelNamedNAT64JoinedTAYGA(t, "configuration", false)
+	testKernelNamedNAT64JoinedTAYGA(t, "configuration", false, false)
 }
 
 func TestKernelNamedNAT64JoinedTAYGAOwner(t *testing.T) {
-	testKernelNamedNAT64JoinedTAYGA(t, "owner", false)
+	testKernelNamedNAT64JoinedTAYGA(t, "owner", false, false)
 }
 
 func TestKernelNamedNAT64JoinedTAYGADirectory(t *testing.T) {
-	testKernelNamedNAT64JoinedTAYGA(t, "directory", false)
+	testKernelNamedNAT64JoinedTAYGA(t, "directory", false, false)
 }
 
 func TestKernelNamedNAT64JoinedFinalInterfaceDenial(t *testing.T) {
-	testKernelNamedNAT64JoinedTAYGA(t, "configuration", true)
+	testKernelNamedNAT64JoinedTAYGA(t, "configuration", true, false)
 }
 
-func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalInterface bool) {
+func TestKernelNamedNAT64JoinedDistinctFinalRules(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "configuration", true, true)
+}
+
+func TestKernelNamedNAT64JoinedOwnerDirectoryPaths(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "split", true, true)
+}
+
+func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalInterface, separateRules bool) {
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
-	if authorization != "configuration" && authorization != "owner" && authorization != "directory" {
+	if authorization != "configuration" && authorization != "owner" && authorization != "directory" && authorization != "split" {
 		t.Fatal("unknown NAT64 fixture authorization", authorization)
 	}
-	sourceOwned, directory := authorization != "configuration", authorization == "directory"
+	sourceOwned, directory := authorization != "configuration", authorization == "directory" || authorization == "split"
 	portBase := uint16(48000)
 	if finalInterface {
 		// These tests share one disposable netns. Link/table cleanup does not
 		// erase conntrack, so retain distinct tuples for the additional graph.
 		portBase = 44000
 	}
+	if separateRules {
+		portBase = 42000
+	}
 	switch authorization {
 	case "owner":
 		portBase = 52000
 	case "directory":
 		portBase = 56000
+	case "split":
+		portBase = 40000
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
@@ -140,6 +153,18 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 				From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::11/128")}},
 				To:   []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.4.11/32")}}},
 		}, b.NetworkModel.Rules...)
+	}
+	if separateRules {
+		// The raw carrier first matches translator rule 5. IPv4 routing
+		// independently selects WAN rule 3 or mixed-family LAN rule 4.
+		b.NetworkModel.Rules = append(b.NetworkModel.Rules[:3],
+			policy.NetworkRule{Action: "allow", Authorization: "owner", Protocol: "any",
+				From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64")}},
+				To:   []policy.NetworkSelector{{Interface: "wan"}}},
+			policy.NetworkRule{Action: "allow", Authorization: allowAuthorization, Protocol: "any",
+				From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64")}},
+				To:   []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.4.0/24")}}},
+			b.NetworkModel.Rules[3])
 	}
 	layout, err := newNativeNAT64AccessLayout(ctx, b, "nat64-internal")
 	if err != nil {
@@ -241,6 +266,10 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 	})
 	applyNAT64Publication(ctx, t, publisher, commandInput{op: applyNAT64Allocations, nat64Allocation: allocations})
 	applyNAT64Publication(ctx, t, publisher, commandInput{op: applyNAT64Tokens, nat64Tokens: tokens})
+	grantPeer := "fdca:1a2b:e064::af0:30a"
+	if authorization == "split" {
+		grantPeer = "fdca:1a2b:e064::af0:40b"
+	}
 	publishDirectory := func(timeout int, enabled bool) {
 		t.Helper()
 		logical := guardChanges{}
@@ -250,7 +279,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		if enabled {
 			for _, protocol := range []string{"tcp", "udp"} {
 				value, marshalErr := json.Marshal(map[string]any{"elem": map[string]any{"timeout": timeout, "val": map[string]any{"concat": []any{
-					"lan10", "02:00:00:00:00:10", "fdca:1a2b::10", "fdca:1a2b:e064::af0:30a", 6061,
+					"lan10", "02:00:00:00:00:10", "fdca:1a2b::10", grantPeer, 6061,
 				}}}})
 				if marshalErr != nil {
 					t.Fatal(marshalErr)
@@ -354,6 +383,14 @@ insert rule inet `+ownedTable+` native_translation_facts_reply_kind counter name
 		packetNft(cleanup, t, "delete table inet n64_join_trace; delete table netdev n64_join_trace")
 	})
 
+	if separateRules {
+		packetNft(ctx, t, `add counter inet n64_join_trace selected_raw_rule
+add counter inet n64_join_trace selected_wan_rule
+add counter inet n64_join_trace selected_lan_rule
+add rule inet n64_join_trace wire_post oifname "nat64-internal" ip6 daddr fdca:1a2b:e064::/96 ct mark & 0x3ff == 5 counter name selected_raw_rule
+add rule inet n64_join_trace wire_post oifname "wan" ip saddr 10.251.0.0/24 ct direction original ct mark & 0x3ff == 3 counter name selected_wan_rule
+add rule inet n64_join_trace wire_post oifname "lan13" ip saddr 10.251.0.0/24 ct direction original ct mark & 0x3ff == 4 counter name selected_lan_rule`)
+	}
 	client, wrong, internet := packetSocket(t, "peer0"), packetSocket(t, "wrongpeer"), packetSocket(t, "wanpeer")
 	source, alias := entries[0].Source, entries[0].Alias
 	target, encoded := netip.MustParseAddr("10.240.3.10"), netip.MustParseAddr("fdca:1a2b:e064::af0:30a")
@@ -370,6 +407,17 @@ insert rule inet `+ownedTable+` native_translation_facts_reply_kind counter name
 		wire.source, wire.destination = alias, netip.MustParseAddr("10.240.4.11")
 		wire.sourceMAC, wire.destinationMAC = "02:00:00:00:01:14", "02:00:00:00:00:14"
 		receivePacket(ctx, t, lan, packetFrame(t, wire), true, 61)
+		if separateRules {
+			reply := wire
+			reply.source, reply.destination = wire.destination, wire.source
+			reply.sourcePort, reply.destinationPort = wire.destinationPort, wire.sourcePort
+			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:00:14", "02:00:00:00:01:14"
+			reply.payload = "distinct-LAN-rule-return"
+			sendPacket(ctx, t, lan, packetFrame(t, reply))
+			reply.source, reply.destination = request.destination, source
+			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:01:10", "02:00:00:00:00:10"
+			receivePacket(ctx, t, client, packetFrame(t, reply), true, 61)
+		}
 	}
 	denied := packetDatagram{source: source, destination: netip.MustParseAddr("fdca:1a2b:e064::af0:30b"), sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
 		sourcePort: portBase, destinationPort: 6061, payload: "projected-deny-" + authorization}
@@ -388,7 +436,7 @@ insert rule inet `+ownedTable+` native_translation_facts_reply_kind counter name
 			request.isICMP, request.icmpType, request.icmpData = true, 128, uint32(serial)<<16|1
 		}
 		sendPacket(ctx, t, client, packetFrame(t, request))
-		if directory && protocol == "echo" {
+		if directory && authorization != "split" && protocol == "echo" {
 			rejectNATPayload(ctx, t, internet, request.payload)
 			continue
 		}
@@ -418,6 +466,65 @@ insert rule inet `+ownedTable+` native_translation_facts_reply_kind counter name
 		receivePacket(ctx, t, client, packetFrame(t, rawReply), true, 61)
 	}
 
+	if separateRules {
+		for _, name := range []string{"selected_raw_rule", "selected_wan_rule", "selected_lan_rule"} {
+			if guardFixtureCounter(ctx, t, "n64_join_trace", name) == 0 {
+				t.Fatal("actual path did not retain its independent rule", name)
+			}
+		}
+	}
+	if authorization == "split" {
+		lan := packetSocket(t, "lanpeer")
+		probe := func(name string, lanPath, existing, allowed bool) {
+			t.Helper()
+			t.Run(name, func(t *testing.T) {
+				port := portBase + 30
+				encodedPeer, peer, socket := encoded, target, internet
+				routerMAC, endpointMAC := "02:00:00:00:01:13", "02:00:00:00:00:13"
+				if lanPath {
+					encodedPeer, peer, socket = netip.MustParseAddr(grantPeer), netip.MustParseAddr("10.240.4.11"), lan
+					routerMAC, endpointMAC = "02:00:00:00:01:14", "02:00:00:00:00:14"
+				}
+				if existing {
+					port = portBase + 2
+					if lanPath {
+						port = portBase - 2
+					}
+				}
+				request := packetDatagram{source: source, destination: encodedPeer, sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
+					sourcePort: port, destinationPort: 6061, payload: "independent-path-" + name}
+				sendPacket(ctx, t, client, packetFrame(t, request))
+				wire := request
+				wire.source, wire.destination = alias, peer
+				wire.sourceMAC, wire.destinationMAC = routerMAC, endpointMAC
+				receivePacket(ctx, t, socket, packetFrame(t, wire), allowed, 61)
+			})
+		}
+		publishDirectory(0, false)
+		probe("owner-existing-survives-directory-loss", false, true, true)
+		probe("owner-new-survives-directory-loss", false, false, true)
+		probe("directory-existing-requires-current-grant", true, true, false)
+		probe("directory-new-requires-current-grant", true, false, false)
+		callback := packetDatagram{source: netip.MustParseAddr("10.240.4.11"), destination: alias,
+			sourceMAC: "02:00:00:00:00:14", destinationMAC: "02:00:00:00:01:14",
+			sourcePort: 6061, destinationPort: portBase - 2, payload: "revoked-directory-reply"}
+		sendPacket(ctx, t, lan, packetFrame(t, callback))
+		callback.source, callback.destination = netip.MustParseAddr(grantPeer), source
+		callback.sourceMAC, callback.destinationMAC = "02:00:00:00:01:10", "02:00:00:00:00:10"
+		receivePacket(ctx, t, client, packetFrame(t, callback), false, 61)
+		publishDirectory(1, true)
+		probe("fresh-directory-grant-restores-existing-path", true, true, true)
+		timer := time.NewTimer(1200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-timer.C:
+		}
+		probe("expired-directory-grant-denies-path", true, true, false)
+		probe("owner-existing-survives-directory-expiry", false, true, true)
+		return
+	}
 	unsolicited := packetDatagram{source: target, destination: alias, sourceMAC: "02:00:00:00:00:13", destinationMAC: "02:00:00:00:01:13",
 		sourcePort: 6061, destinationPort: portBase + 10, payload: "unsolicited-nat64-" + authorization}
 	sendPacket(ctx, t, internet, packetFrame(t, unsolicited))

@@ -18,14 +18,18 @@ import (
 // injected IPv4 equivalent can reach the actual final-interface policy. The
 // test-only readiness object is synthetic; real TAYGA is qualified separately.
 func TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T) {
-	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false)
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, false)
 }
 
 func TestKernelNamedNAT64WireSourceEpochAndAllocationScopes(t *testing.T) {
-	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, true)
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, true, false)
 }
 
-func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, sourceOwned bool) {
+func TestKernelNamedNAT64WireLANOnlyPolicy(t *testing.T) {
+	testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t, false, true)
+}
+
+func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, sourceOwned, lanOnly bool) {
 	t.Helper()
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
@@ -50,6 +54,9 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 		{Action: "allow", Authorization: "owner", Protocol: "udp", Ports: []uint16{6061},
 			From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64"), MAC: "02:00:00:00:00:10"}},
 			To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}}},
+	}
+	if lanOnly {
+		b.NetworkModel.Rules[2].To = []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.3.0/24")}}
 	}
 	layout, err := newNativeNAT64AccessLayout(ctx, b, "nat64-internal")
 	if err != nil {
@@ -162,6 +169,9 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 	}
 	client, translated, target := packetSocket(t, "peer0"), packetSocket(t, "n64peer"), packetSocket(t, "device0")
 	serial := uint16(46000)
+	if lanOnly {
+		serial = 45000
+	}
 	if sourceOwned {
 		serial = 47000
 	}
@@ -184,7 +194,7 @@ func testKernelNamedNAT64WireFinalPolicyAndAllocationScopes(t *testing.T, source
 			receivePacket(ctx, t, target, packetFrame(t, wire), allowed)
 		})
 	}
-	probe("denied-final-LAN", "fdca:1a2b:e064::af0:30b", "10.240.3.11", true, false)
+	probe("denied-final-LAN", "fdca:1a2b:e064::af0:30b", "10.240.3.11", !lanOnly, false)
 	probe("allowed-other-source-deny", "fdca:1a2b:e064::af0:30a", "10.240.3.10", true, true)
 	scope := slices.Index(transport.sourceScopes, netip.MustParsePrefix("fdca:1a2b::/64"))
 	if scope < 0 {
