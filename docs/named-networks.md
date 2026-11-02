@@ -305,9 +305,10 @@ isolated VM with their existing assertions and time limits. They exercise six
 synthetic maps, TCP/UDP/echo, listener checks, wrong addresses and interfaces,
 missing or expired proofs, physical metadata/header changes, independent source
 withdrawal and immutable connection epochs. The callback case also exercises
-allocation withdrawal and recovery. The VM runner retains its original first
-three groups and splits the growing translation tail into groups of at most
-three. Its 360-second VM limit and 90-second fixture limits are unchanged.
+allocation withdrawal and recovery. The VM runner retains the complete fixture
+order and splits it into groups of at most three. It independently checks an
+empty ruleset and no extra interfaces after each batch. Its 360-second VM cap and individual fixture
+time limits are unchanged.
 These fixtures use synthetic caller grants
 and conversion frames; they do not qualify callback ordered-policy compilation,
 actual TAYGA conversion or live authorities.
