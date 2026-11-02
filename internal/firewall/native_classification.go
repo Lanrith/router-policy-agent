@@ -15,8 +15,8 @@ import (
 // It derives them from the already validated logical transaction; no caller can
 // supply a separate physical identity, remove history, or extend a grant.
 func prepareLayoutGuards(ctx context.Context, source *preparedBatch, history *state.Classification, layout *guardLayout) (*preparedGuardBatch, error) {
-	if sources := layout.nat46Sources(); sources != nil && history != nil {
-		projected, err := sources.model.translatedClassification(ctx, *history)
+	if history != nil {
+		projected, err := layout.translatedClassification(ctx, *history)
 		if err != nil {
 			return nil, err
 		}
@@ -112,14 +112,15 @@ func expandNativeGuardsWithSource(ctx context.Context, source []byte, publicatio
 	return data, ctx.Err()
 }
 
-func stripNativeGuards(source []byte) ([]byte, error) {
-	decoded, err := decodeGuardChanges(source)
+func stripNativeGuardsWithCallbacks(source []byte, callbacks []*nativeNAT64CallbackModel) ([]byte, error) {
+	decoded, err := decodeGuardChangesWithExtra(source, 2*len(nativeNAT64CallbackGrantRefs(callbacks)))
 	if err != nil {
 		return nil, err
 	}
 	commands := make([]change, 0, len(decoded.Commands))
 	refs := append(nativeGrantRefs(), nativeNAT46TargetGrantRefs()...)
 	refs = append(refs, nativeNAT64GrantRefs()...)
+	refs = append(refs, nativeNAT64CallbackGrantRefs(callbacks)...)
 	for _, command := range decoded.Commands {
 		if command.Flush != nil && slices.Contains(refs, command.Flush.Set) {
 			continue
@@ -139,7 +140,10 @@ func stripNativeGuards(source []byte) ([]byte, error) {
 }
 
 func validateNativeGuardBatch(ctx context.Context, prepared *preparedGuardBatch) error {
-	logical, err := stripNativeGuards(prepared.batch.data)
+	if _, err := preparedNativeNAT64Transports(prepared); err != nil {
+		return err
+	}
+	logical, err := stripNativeGuardsWithCallbacks(prepared.batch.data, prepared.nat64Callbacks)
 	if err != nil {
 		return err
 	}
@@ -171,7 +175,7 @@ func validateNativeGuardBatch(ctx context.Context, prepared *preparedGuardBatch)
 		return err
 	}
 	if len(transports) != 0 {
-		expected, err = expandNativeNAT64Grants(ctx, expected, prepared.sourcePublication, transports, prepared.sourceUTC, prepared.sourceAnchor)
+		expected, err = expandNativeNAT64Grants(ctx, expected, prepared.sourcePublication, transports, prepared.sourceUTC, prepared.sourceAnchor, prepared.nat64GrantOrigins...)
 		if err != nil {
 			return err
 		}
@@ -197,6 +201,13 @@ func validateNativeGuardBatch(ctx context.Context, prepared *preparedGuardBatch)
 	}
 	if err := validateNAT64GrantDeadlines(ctx, prepared); err != nil {
 		return err
+	}
+	for _, model := range prepared.nat64Callbacks {
+		if model != nil {
+			if err := validateMappedTargetGrantDeadlines(ctx, prepared, model.mapped); err != nil {
+				return err
+			}
+		}
 	}
 	return ctx.Err()
 }

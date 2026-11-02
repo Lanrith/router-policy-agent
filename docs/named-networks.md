@@ -70,6 +70,13 @@ MAC and native address. Its kernel timeout stays below the original producer
 deadline and the helper's elapsed-age limit. Diagnostic snapshots and saved
 classification cannot supply positive ownership evidence.
 
+Repeated reads of the same producer generation keep the original opaque source
+publication and its installed deadlines. They neither rewrite the parent timeout
+nor withdraw current NAT grant projections. Reuse requires identical association,
+addresses and deadlines, a matching inspected epoch and an unexpired original
+receipt. Changed evidence still follows the fenced refresh/revocation path; a
+source update never restores an expired or previously withdrawn directory grant.
+
 Early and late forwarding checks reject a classified source without current
 ownership. Final egress checks require current ownership for a classified
 destination MAC too. A new association or ownership episode revokes the old
@@ -112,6 +119,253 @@ configuration-based connections survive ownership revocation, and that changing
 either epoch rejects its own old connections. The separate native owner
 component below selects and rechecks these epochs; complete router integration
 remains gated.
+
+For selected NAT64 components, the root-owned runtime witness requires
+`pid`, `start_ticks`, `monotonic`, `configuration_sha256`, `executable_device`
+and `executable_inode`. The timestamp uses kernel boot time, including suspend;
+the witness expires after four seconds. The translator supervisor obtains the
+executable identity through a two-second, non-dumpable worker running as the
+translator UID. Only the supervisor can publish this file. A stalled worker is
+terminated and reaped without publishing a witness.
+
+The enforcing helper checks that witness against the image-owned, single-link
+ELF and independently rereads the live process UID, start ticks, exact command
+and empty effective/permitted/inheritable/ambient capabilities. It rejects
+changed files, missing fields, stale evidence and dead or replaced processes.
+It needs no signal or ptrace authority: its capability ceiling remains
+`CAP_NET_ADMIN`. The witness does not grant forwarding permission; allocation,
+ordered policy, current ownership, directory grants and translated tuple checks
+remain separate requirements.
+
+Allocation demand preserves a separate ordered program for each possible final
+IPv4 interface. A WAN-only deny terminates the WAN program; it does not suppress
+a permitted LAN request. An unscoped deny applies to every program. Each program
+retains the original source interface, IPv6 range, MAC, protocol, ports and rule
+indices. Identical raw programs share a request chain. The result only records
+bounded pending demand: owner and directory candidates still gain no forwarding
+permission without the independent allocation, epoch, identity and tuple checks.
+Raw IPv6 admission binds source connectivity to the selected translator; it
+does not choose the final destination permission. A directory candidate can
+reach that boundary without a current grant, but cannot pass the IPv4 wire
+guard without one. On the imported IPv4 leg, the helper evaluates the ordered
+rules against the actual final interface and destination. Only a private,
+unconfirmed connection with an empty marker may bind the winning wire rule.
+Later packets must retain that rule and its current authority epoch. A matching
+deny or missing directory grant terminates evaluation rather than falling
+through to a wider permit. Original source MAC/interface classes remain bound to the token;
+timed IPv4 memberships preserve the original IPv6 source ranges. The privileged
+writer derives those memberships from the original allocation ledger and live
+translator proof, and replaces or clears them with the other allocation state.
+A different source's alias cannot be substituted by changing a serialized row.
+
+Token and allocation replacement or revocation also clear every TCP, UDP and
+ICMP authorization, origin-marker and source-identity proof map in the same
+kernel transaction. Opaque
+token IDs can be reassigned within the next registry; an old export must never acquire that
+registry's authority epoch. Packets in flight across publication can therefore
+be dropped. A permitted original must export a fresh tuple, and an old connection
+cannot acquire a newer configuration or ownership epoch through translation.
+
+An imported IPv4 connection retains the original IPv6 connection marker in
+separate conntrack labels. Repeated originals must match that saved marker.
+Replies export an additional timed tuple proof, and IPv6 return import compares
+it with the original connection. A changed marker, missing proof, conflicting
+label contents or confirmed connection without an origin is rejected. These
+checks preserve connection provenance independently of destination permission;
+the current ordered policy, ownership and grant checks still apply.
+
+Before exporting a raw IPv6 original, the helper captures or compares its
+complete source facts. A confirmed connection cannot acquire another source
+context, UID or authority kind. The IPv4 connection separately retains the
+original context, 13-bit source UID and configuration-versus-owned class in
+private labels, preserving unrelated label 100. A reply exports these 24 bits
+in a third timed tuple proof. IPv6 return import requires that proof to match
+the original connection's saved source facts as well as its marker. Equal
+numeric configuration and ownership epochs cannot substitute for source class.
+All twelve timed tuple maps are withdrawn together on publication changes.
+The required kernel suite tests each identity bit, confirmed and foreign-label
+rejection, and substituted return contexts, source IDs and source classes.
+
+Export carries its temporary token in packet priority and never writes the
+connection marker. It preserves the packet's QoS byte and saved priority.
+After exporting the independent origin, an IPv4 reply recovers its authorization
+priority from immutable connection labels before looking up its token. Token
+and allocation publication include the typed export-priority conversion map.
+The kernel return fixture observes the unchanged marker during export and the
+restored packet metadata before physical enforcement. Missing and substituted
+proofs must be rejected within their original two-second lifetime.
+
+The translator attachment's source floor permits only its IPv4 pool and IPv6
+translation prefix. WAN source validation rejects both ranges. These checks
+grant no access independently of allocation, policy, epochs and tuple proofs.
+Separate final interfaces can select different rules while retaining the raw
+connection's immutable source marker. The token registry binds both markers
+without allowing two origins for one lookup key. Physical raw admission shares
+interface/MAC programs while retaining the exact winning source context and all
+source-floor checks; it does not raise the compiler's rule capacity.
+Exact duplicate raw programs also share one branch, preserving their first
+occurrence and complete rule order. Final-interface wire programs remain
+independent; only connectivity demand and raw carrier admission share branches.
+
+The real-TAYGA fixtures exercise different WAN/LAN winning rules and a LAN
+directory permission beside a WAN owner permission. Directory withdrawal and
+expiry deny the LAN flow while existing and new WAN owner flows continue. Their
+IPv6 ownership receipt and translator readiness are synthetic.
+
+An unclassified IPv6 caller can now reach a currently owned IPv4 target through
+a separate target-authority channel. Owner permission still requires the target's
+current address, interface, MAC and ownership epoch. Directory permission also
+requires a fresh, exact target grant; TCP and UDP grants remain separate.
+The compiler's reviewed source mapping binds the IPv4 caller alias to its
+original IPv6 address. A pool address by itself supplies no caller identity.
+
+Target lookup and return tokens are derived from the original ownership receipt
+and immutable access graph, including the translator's global/private target
+class. They retain the raw source configuration epoch
+separately from the target's ownership epoch. Target ownership must follow the
+configuration in the helper's durable sequence. Physical egress first checks
+current target authority and any grant, then checks the independently bound
+configuration epoch. Return egress also checks the original client interface
+and MAC class. A confirmed wire connection cannot acquire a newer target epoch.
+Token and allocation publication withdraw target lookups, physical origin maps
+and all twelve tuple proofs together. The required native fixture includes rule/context zero and
+stale tuple withdrawal; real-TAYGA fixtures cover both target authorization modes.
+
+Target grant qualification also compiles raw directory policies and bindings
+through the authorization compiler, renderer and deny-only classifier. The
+translator fixture uses those unchanged compiled grants, including temporary
+policy expiry. Inactive accounts, placement alone, missing ownership, earlier
+denies and incompatible ports or protocols produce no target grant. Encoded
+target addresses retained in classification history are checked against the
+actual IPv4 target after translation. Raw carrier egress retains its source
+identity, floor and epoch checks while supplying connectivity to the translator.
+
+A recipient's exact listener grant can also authorize a currently owned IPv6
+caller through its retained or runtime-allocated source alias. The projection keeps the caller's
+IPv6 UID and ownership epoch; it cannot substitute the recipient's IPv4 UID.
+Its deadline is bounded by the original caller ownership, target ownership and
+recipient grant. Source and recipient grants both pass through the actual
+directory compiler, renderer and classifier before packet qualification.
+Placement alone supplies no access grant.
+
+The allocated IPv4 source and return alias represent the original caller through
+exact imported tuple proofs. They retain current caller ownership and ordered
+policy checks without treating that alias as a native device on the translator
+attachment. Managed or classified IPv4 return senders require an independent
+current epoch/address proof at physical egress. This proof is derived from the
+original ownership receipt, mirrored in both table families and cleared with
+ownership; it supplies no permission. Target expiry closes both a fresh request
+and an admitted reply while the caller and its source grant remain current.
+
+Real-TAYGA fixtures cover recipient-only permission with and without caller
+classification history, source permission to an owned target, and owner
+permission with both endpoints owned. The caller and target deliberately have
+different address-family UIDs. Wrong attachments and MACs, expired or withdrawn
+grants, missing sender proofs and stale tuples remain closed.
+
+Dynamic source-alias grants retain the original process-local allocation ledger
+and live translator supervisor proof. Preparation rechecks the exact selected
+transport and original ledger before deriving the alias. The privileged executor
+reconstructs the grant mirrors from those same dependencies and rechecks live
+readiness. The backend captures the runtime activation under its writer fence;
+commit and readback reject a replaced activation even if its allocation data
+looks identical. Missing readiness still permits deny-only revocation.
+
+For a recipient grant, the compiler already supplies the encoded IPv6 target
+and native IPv6 caller. The projection derives their actual IPv4 target and
+allocated source alias from the selected component's original ledger. It does
+not add counterparts to the compiler baseline or recompile normalized
+configuration at runtime. A ledger or an allocation alone supplies no permission.
+Retained unready mappings remain closed.
+
+Five real-TAYGA fixtures use an authorization baseline with no configured source
+aliases. They cover source grants, target grants, recipient grants with and
+without caller history, and source grants to independently owned targets. A
+separate backend fixture exercises actual guarded transactions and independent
+profile inspection, rejects queued work after activation replacement and seals
+grants after readiness loss. It uses dummy links and synthetic readiness rather
+than a translator process. Neither fixture is evidence of a live IPv6 binding
+producer or image activation.
+
+A separate construction-only component now supplies callback tuple correlation
+for retained ready NAT64 source aliases on their selected attachment. A callback
+starts an IPv4 connection toward a mapped IPv6 endpoint. It cannot consume the
+proof for an established reply to an earlier IPv6-initiated connection. Its
+mapping, protocol, direction and complete metadata tuple have their own object
+names. Each leg also requires the selected component's current allocation.
+
+The component reuses the mapped IPv4/IPv6 transport with an explicit attachment;
+ordinary NAT46 retains its original attachment and generated program. Callback
+proofs join the NAT64 allocation/token withdrawal inventory. After allocation
+recovery, an old packet still needs a newly exported callback proof. Unready
+reservations and undeclared or ambiguous native target attachments remain closed.
+
+The complete callback transport and original NAT46 packet fixtures pass in an
+isolated VM with their existing assertions and time limits. They exercise six
+synthetic maps, TCP/UDP/echo, listener checks, wrong addresses and interfaces,
+missing or expired proofs, physical metadata/header changes, independent source
+withdrawal and immutable connection epochs. The callback case also exercises
+allocation withdrawal and recovery. The VM runner retains the complete fixture
+order and splits it into groups of at most three. It independently checks an
+empty ruleset and no extra interfaces after each batch. Its 360-second VM cap and individual fixture
+time limits are unchanged.
+The native `make kernel` qualification separates parallel unit/property tests
+from serial core, NAT46 and NAT64 packet groups. Every tagged test belongs to
+exactly one group. Each invocation retains race detection, shuffled order,
+uncached execution and Go's original default deadline; the container capabilities,
+required header checks and overall CI job limit are unchanged. The separately
+seeded conntrack regression still runs in its own network namespace.
+These tuple fixtures use synthetic caller grants and conversion frames; they do
+not qualify actual callback TAYGA conversion or live authorities.
+
+A separate callback policy model compiles the original immutable owner rules
+under the selected NAT64 component. It retains rule indices, paired interface,
+MAC and address alternatives, protocols, ports and first-match authorization.
+Earlier denies and directory requirements terminate the connection instead of
+falling through to a later owner permit. The generated policy and grant leaf
+names are distinct from ordinary NAT46.
+
+The policy compiler supplies the component's IPv4 address class. Callback wire
+and physical policies check the embedded IPv4 caller against that class in both
+directions, including under a broad owner rule. The public prefix excludes
+private and unsupported IPv4 space; the private component accepts private IPv4
+space. All translator source pools and NAT46 alias pools are excluded as caller
+identities. Class descriptions are connectivity data and grant no access.
+
+The construction-only recipient-grant projection requires the original allocation
+ledger, live supervisor proof and IPv6 ownership receipt. It accepts only retained
+ready callback mappings and eligible native IPv4 callers. Both packet families
+retain the exact recipient alias, caller and TCP/UDP listener under the original
+ownership epoch and expiry. Its collections have a distinct component namespace;
+generic mutation cannot publish them. Deny-only cleanup needs no fresh positive
+translator or ownership proof. Eight directory cases exercise the original
+compiler, classifier and renderer before projection, including earlier owner
+denies and unsatisfied listener or identity requirements.
+
+A data-only writer prototype freezes these collections before publication and
+retains the original callback model, source receipt and runtime activation.
+Before mutation it rederives the complete transaction and checks each original
+deadline. Independent readback checks the recipient's IPv6 ownership, logical
+caller and listener, epoch, lifetime and both table mirrors. Source transitions
+and sealing clear callback grants without positive readiness. Permanent deny
+history also covers classified recipients' aliases and embedded addresses.
+
+The dummy-link backend fixture exercises actual nftables transactions, changed
+wire grants, queued activation replacement, damaged mirrors, source revocation
+and readiness loss. This constructor installs no callback forwarding hooks and
+is not an installed profile mode. Packet admission still needs the joined source,
+recipient, tuple, grant and physical checks described below.
+
+The callback policy fixture exercises TCP/UDP/echo, terminal directory decisions,
+scoped current listener grants, independent physical revocation, wrong callers
+and interfaces, packet mutations, immutable epochs and grant expiry. Its callers
+and connection metadata remain synthetic. It runs separately from callback
+tuple correlation and supplies no evidence of complete four-leg admission.
+
+Default profiles still deny new callbacks. Complete callback grant, source and
+target ownership, tuple and physical-path integration remains required. Actual
+IPv6 ownership production, WAN source NAT, correlated errors and complete image
+activation also remain unqualified.
 
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection
@@ -313,6 +567,18 @@ postrouting priority 200 requires a declared forwarding egress and an admitted
 connection kind. Losing both the mark and saved priority fails there. Local
 router output remains subject to its separate root firewall; the forwarding
 guard preserves neighbor discovery and other local control traffic.
+
+The physical guard returns locally generated Ethernet/IPv4 ARP requests and
+replies before the managed-MAC ownership check. It checks hardware/protocol
+types and address lengths. Local IPv6 router/neighbor solicitations and
+advertisements require hop limit 255 and ICMP code zero. ARP requires incoming
+interface zero. IPv6 control requires that identity or
+a local-output token set by the image-owned output hook and cleared by forwarding
+admission. Kernel replies can report their output device as the incoming
+identity by postrouting. The token grants no forwarding permission. These
+control packets remain available during ownership expiry or a directory outage.
+They set no permission mark. Redirects, echo and application traffic receive no
+exception, and the separate router input/output firewall still applies.
 
 The physical-floor fixture tests original and reply address substitutions in
 both families with TCP/UDP, router and wrong-network source changes, protected

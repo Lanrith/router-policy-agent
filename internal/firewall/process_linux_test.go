@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -203,9 +206,55 @@ func TestProcessFailureAndCancellation(t *testing.T) {
 				t.Fatalf("failed command leaked a response or diagnostic: %v", err)
 			}
 			if test.file == "nft-sleep" && !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("deadline was not propagated: %v", err)
+				t.Fatalf("deadline was not propagated: %v; controlled fixture diagnostic: %s", err, diagnoseSleepFixture(t, process.executable))
 			}
 		})
+	}
+}
+
+// Only this test's own copied ELF may supply diagnostic output. Never apply
+// this to real nftables: the production runner must continue redacting all
+// command output, which may contain private endpoints or programs.
+func sleepFixtureFailure(t *testing.T, executable *os.File) string {
+	t.Helper()
+	if executable == nil || filepath.Base(executable.Name()) != "nft-sleep" {
+		t.Fatal("diagnostics require the controlled sleep fixture")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	command := exec.CommandContext(ctx, "/proc/self/fd/3", "--json", "list", "table", "inet", ownedTable)
+	command.Args[0] = "nft"
+	command.ExtraFiles = []*os.File{executable}
+	command.Env = []string{"LC_ALL=C", "PATH=/usr/sbin:/usr/bin"}
+	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	command.WaitDelay = commandWaitDelay
+	stdout, stderr := boundedOutput{maximum: 8192}, boundedOutput{maximum: 8192}
+	command.Stdout, command.Stderr = &stdout, &stderr
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	err := command.Run()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return ""
+	}
+	return fmt.Sprintf("result=%v stdout=%q stderr=%q", err, stdout.buffer.Bytes(), stderr.buffer.Bytes())
+}
+
+func diagnoseSleepFixture(t *testing.T, executable *os.File) string {
+	t.Helper()
+	for attempt := range 32 {
+		if result := sleepFixtureFailure(t, executable); result != "" {
+			return fmt.Sprintf("attempt %d: %s", attempt+1, result)
+		}
+	}
+	return "early exit was not reproduced in 32 controlled attempts"
+}
+
+func TestSyntheticELFSleepFixtureStartupIsReliable(t *testing.T) {
+	process, _ := processFixture(t, "nft-sleep")
+	for attempt := range 32 {
+		if result := sleepFixtureFailure(t, process.executable); result != "" {
+			t.Fatalf("controlled ELF exited before its deadline on attempt %d: %s", attempt+1, result)
+		}
 	}
 }
 

@@ -5,10 +5,44 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
+
+func TestNativeAccessWithoutSameFamilyScopesRetainsClosedProgram(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"empty", "mixed family only"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			baseline := nativeAccessBaseline(t)
+			baseline.NetworkModel.Rules = []policy.NetworkRule{}
+			if name == "mixed family only" {
+				baseline.NetworkModel.Rules = []policy.NetworkRule{{Action: "deny", Authorization: "inherit", Protocol: "any",
+					From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::10/128")}},
+					To:   []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("10.240.3.10/32")}}}}
+			}
+			layout, err := newNativeAccessLayout(t.Context(), baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			program, err := layout.program(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(program, []byte("chain native_denies {\n}")) {
+				t.Fatal("program references an absent or nonempty native deny boundary")
+			}
+			for _, hook := range []string{"guard_forward", "permit_flow"} {
+				ordered := strings.Join(nativeRulesText(layout.native.inet["native_ordered_"+hook]), "\n")
+				if ordered != "drop" {
+					t.Fatal("incompatible or absent permissions escaped default denial", ordered)
+				}
+			}
+		})
+	}
+}
 
 func nativeAccessBaseline(t *testing.T) policy.Baseline {
 	t.Helper()

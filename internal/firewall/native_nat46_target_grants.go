@@ -17,11 +17,15 @@ import (
 // both from the same logical tuple avoids treating untyped payload bits as an
 // ipv4_addr, and keeps the static client namespace separate from NAS IPv4 IDs.
 func nativeNAT46TargetGrantRefs() []objectReference {
+	return nativeMappedTargetGrantRefs("native_n46")
+}
+
+func nativeMappedTargetGrantRefs(namespace string) []objectReference {
 	refs := []objectReference{}
 	for _, family := range []string{"inet", "netdev"} {
 		for _, protocol := range []string{"tcp", "udp"} {
 			for _, version := range []int{4, 6} {
-				refs = append(refs, objectReference{Family: family, Table: ownedTable, Name: fmt.Sprintf("native_n46_to%d_%s", version, protocol)})
+				refs = append(refs, objectReference{Family: family, Table: ownedTable, Name: fmt.Sprintf("%s_to%d_%s", namespace, version, protocol)})
 			}
 		}
 	}
@@ -29,13 +33,17 @@ func nativeNAT46TargetGrantRefs() []objectReference {
 }
 
 func nativeNAT46TargetGrantDefinitions(family string) []string {
+	return nativeMappedTargetGrantDefinitions(family, "native_n46")
+}
+
+func nativeMappedTargetGrantDefinitions(family, namespace string) []string {
 	definitions := []string{}
-	for _, ref := range nativeNAT46TargetGrantRefs() {
+	for _, ref := range nativeMappedTargetGrantRefs(namespace) {
 		if ref.Family != family {
 			continue
 		}
 		address := "ipv4_addr"
-		if ref.Name == "native_n46_to6_tcp" || ref.Name == "native_n46_to6_udp" {
+		if ref.Name == namespace+"_to6_tcp" || ref.Name == namespace+"_to6_udp" {
 			address = "ipv6_addr"
 		}
 		definitions = append(definitions, guardSetDefinition(ref.Name, "classid . ipv4_addr . "+address+" . inet_service"))
@@ -44,12 +52,16 @@ func nativeNAT46TargetGrantDefinitions(family string) []string {
 }
 
 func nativeNAT46TargetGrantSchema(schema *guardTableSchema, family string) {
-	for _, ref := range nativeNAT46TargetGrantRefs() {
+	nativeMappedTargetGrantSchema(schema, family, "native_n46")
+}
+
+func nativeMappedTargetGrantSchema(schema *guardTableSchema, family, namespace string) {
+	for _, ref := range nativeMappedTargetGrantRefs(namespace) {
 		if ref.Family != family {
 			continue
 		}
 		address := "ipv4_addr"
-		if ref.Name == "native_n46_to6_tcp" || ref.Name == "native_n46_to6_udp" {
+		if ref.Name == namespace+"_to6_tcp" || ref.Name == namespace+"_to6_udp" {
 			address = "ipv6_addr"
 		}
 		schema.sets[ref.Name] = guardLeaseHeader(family, ref.Name, []string{"classid", "ipv4_addr", address, "inet_service"})
@@ -99,7 +111,7 @@ func (model *nativeNAT46Model) projectTargetGrants(ctx context.Context, logical 
 		mappings[mapping.alias] = mapping
 	}
 	values := map[string]map[string]int{}
-	for _, ref := range nativeNAT46TargetGrantRefs() {
+	for _, ref := range nativeMappedTargetGrantRefs(model.policyNamespace()) {
 		values[ref.Name] = map[string]int{}
 	}
 	for _, command := range logical.Commands {
@@ -164,7 +176,7 @@ func (model *nativeNAT46Model) projectTargetGrants(ctx context.Context, logical 
 				if err != nil {
 					return nil, err
 				}
-				name := fmt.Sprintf("native_n46_to%d_%s", version, protocol)
+				name := fmt.Sprintf("%s_to%d_%s", model.policyNamespace(), version, protocol)
 				values[name][string(key)] = max(values[name][string(key)], timeout)
 				if len(values[name]) > maximumTupleCount {
 					return nil, errors.New("firewall: nat46 target grant capacity exceeded")
@@ -173,7 +185,7 @@ func (model *nativeNAT46Model) projectTargetGrants(ctx context.Context, logical 
 		}
 	}
 	commands := []change{}
-	for _, ref := range nativeNAT46TargetGrantRefs() {
+	for _, ref := range nativeMappedTargetGrantRefs(model.policyNamespace()) {
 		commands = append(commands, change{Flush: &setChange{Set: ref}})
 		keys := []string{}
 		for key := range values[ref.Name] {
@@ -214,7 +226,7 @@ func (leg nativeNAT46Leg) targetGrant(wire bool) []nativeScope {
 	if leg.reply {
 		target, client, port = "saddr", "daddr", "sport"
 	}
-	set := fmt.Sprintf("native_n46_to%d_%s", version, leg.protocol)
+	set := fmt.Sprintf("%s_to%d_%s", leg.grantNamespace(), version, leg.protocol)
 	key := map[string]any{"concat": []any{guardBinary("&", guardMeta("priority"), "ffff:fc00"), leg.mapping.alias.String(), guardPayload(family, client), guardPayload(leg.protocol, port)}}
 	geometry := nativeMatch(family+" "+target+" "+address.String(), guardPayload(family, target), address.String())
 	if wire {

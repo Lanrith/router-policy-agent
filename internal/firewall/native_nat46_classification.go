@@ -9,6 +9,30 @@ import (
 	"github.com/lanrith/router-policy-agent/internal/state"
 )
 
+func (layout *guardLayout) translatedClassification(ctx context.Context, history state.Classification) (state.Classification, error) {
+	var err error
+	if sources := layout.nat46Sources(); sources != nil {
+		history, err = sources.model.translatedClassification(ctx, history)
+		if err != nil {
+			return state.Classification{}, err
+		}
+	}
+	callbacks, err := layout.nat64CallbackModels()
+	if err != nil {
+		return state.Classification{}, err
+	}
+	for _, model := range callbacks {
+		if model == nil {
+			continue
+		}
+		history, err = model.mapped.translatedClassification(ctx, history)
+		if err != nil {
+			return state.Classification{}, err
+		}
+	}
+	return history, ctx.Err()
+}
+
 // translatedClassification extends only deny history, using this model's owned
 // root geometry. The original persisted history is unchanged. A real IPv4
 // identity also closes its embedded IPv6 representation; a classified mapped

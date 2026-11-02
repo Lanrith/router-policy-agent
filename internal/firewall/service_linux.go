@@ -123,6 +123,7 @@ type serviceListeners struct {
 	requests *net.UnixListener
 	status   *net.UnixListener
 	operator *ipc.Server
+	ready    func(context.Context) error
 }
 
 // serveListeners admits the optional status listener only as a complete,
@@ -165,6 +166,16 @@ func (s *guardedService) serveListeners(ctx context.Context, listeners serviceLi
 	if err := s.engine.Start(ctx); err != nil {
 		return fmt.Errorf("firewall: start helper service: %w", err)
 	}
+	if s.backend.options.profile.layout.ownership {
+		if err := s.engine.InitializeBindings(ctx); err != nil {
+			return fmt.Errorf("firewall: initialize qualified bindings: %w", err)
+		}
+	}
+	if listeners.ready != nil {
+		if err := listeners.ready(ctx); err != nil {
+			return fmt.Errorf("firewall: publish helper readiness: %w", err)
+		}
+	}
 	servers := func(ctx context.Context) error {
 		if listeners.status == nil {
 			return s.server.Serve(ctx, listeners.requests)
@@ -181,17 +192,25 @@ func (s *guardedService) serveListeners(ctx context.Context, listeners serviceLi
 }
 
 func (s *guardedService) superviseOwnership(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
-		if err := s.engine.RefreshBindings(ctx); err != nil {
-			return err
-		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 		}
+		err := s.engine.RefreshBindings(ctx)
+		delay := 10 * time.Second
+		if errors.Is(err, agent.ErrBindingsPending) {
+			// RefreshBindings already clears ownership and application permits
+			// while retaining deny-only history. A producer's explicit negative
+			// interval need not restart the helper or refresh any grant lifetime.
+			delay = 250 * time.Millisecond
+		} else if err != nil {
+			return err
+		}
+		timer.Reset(delay)
 	}
 }
 

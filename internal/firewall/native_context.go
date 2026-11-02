@@ -175,28 +175,7 @@ func (access *nativeAccess) compilePhysicalOrder(ctx context.Context, set *nativ
 }
 
 func (access *nativeAccess) compilePhysicalOrderSource(ctx context.Context, set *nativeRuleSet, chain, iface, mac string, reply bool, sourceClass *nativeSourceClass) error {
-	if sourceClass == nil {
-		access.netdev[chain] = append(access.netdev[chain], nativeVerdict("jump", "native_raw_floor"), nativeVerdict("jump", access.sourceGuards[iface]))
-	}
-	sourceGuard := chain + "_source"
-	access.netdev[chain] = append(access.netdev[chain], nativeVerdict("jump", sourceGuard))
-	switch {
-	case sourceClass != nil:
-		access.netdev[sourceGuard] = []nativeScope{nativeVerdict("goto", "native_nat_source")}
-	case slices.Contains(access.managed, iface):
-		access.netdev[sourceGuard] = []nativeScope{nativeVerdict("goto", "native_bound_source")}
-	default:
-		for _, family := range []struct{ protocol, set string }{{"ip", classified4Set}, {"ip6", classified6Set}} {
-			access.netdev[sourceGuard] = append(access.netdev[sourceGuard], nativeJoin(nativeMatch(family.protocol+" saddr @"+family.set, guardPayload(family.protocol, "saddr"), "@"+family.set), nativeVerdict("goto", "native_bound_source")))
-		}
-		for _, condition := range []nativeScope{
-			{text: "meta mark & 0xe000 != 0", expressions: []any{map[string]any{"match": map[string]any{"op": "!=", "left": guardBinary("&", guardMeta("mark"), uint64(0xe000)), "right": uint64(0)}}}},
-			{text: "meta priority & 0x3ff != none", expressions: []any{map[string]any{"match": map[string]any{"op": "!=", "left": guardBinary("&", guardMeta("priority"), "0:3ff"), "right": "none"}}}},
-		} {
-			access.netdev[sourceGuard] = append(access.netdev[sourceGuard], nativeJoin(condition, nativeVerdict("goto", "native_bound_source")))
-		}
-		access.netdev[sourceGuard] = append(access.netdev[sourceGuard], nativeVerdict("return", ""))
-	}
+	access.compilePhysicalContextSource(chain, iface, sourceClass)
 	for _, rule := range set.rules {
 		selected := rule
 		if sourceClass != nil {
@@ -264,4 +243,31 @@ func (access *nativeAccess) compilePhysicalOrderSource(ctx context.Context, set 
 	}
 	access.netdev[chain] = append(access.netdev[chain], verdict)
 	return ctx.Err()
+}
+
+// Keep the complete physical source boundary shared by ordinary and NAT64
+// carrier ordering, including classified sources on otherwise unmanaged LANs.
+func (access *nativeAccess) compilePhysicalContextSource(chain, iface string, sourceClass *nativeSourceClass) {
+	if sourceClass == nil {
+		access.netdev[chain] = append(access.netdev[chain], nativeVerdict("jump", "native_raw_floor"), nativeVerdict("jump", access.sourceGuards[iface]))
+	}
+	sourceGuard := chain + "_source"
+	access.netdev[chain] = append(access.netdev[chain], nativeVerdict("jump", sourceGuard))
+	switch {
+	case sourceClass != nil:
+		access.netdev[sourceGuard] = []nativeScope{nativeVerdict("goto", "native_nat_source")}
+	case slices.Contains(access.managed, iface):
+		access.netdev[sourceGuard] = []nativeScope{nativeVerdict("goto", "native_bound_source")}
+	default:
+		for _, family := range []struct{ protocol, set string }{{"ip", classified4Set}, {"ip6", classified6Set}} {
+			access.netdev[sourceGuard] = append(access.netdev[sourceGuard], nativeJoin(nativeMatch(family.protocol+" saddr @"+family.set, guardPayload(family.protocol, "saddr"), "@"+family.set), nativeVerdict("goto", "native_bound_source")))
+		}
+		for _, condition := range []nativeScope{
+			{text: "meta mark & 0xe000 != 0", expressions: []any{map[string]any{"match": map[string]any{"op": "!=", "left": guardBinary("&", guardMeta("mark"), uint64(0xe000)), "right": uint64(0)}}}},
+			{text: "meta priority & 0x3ff != none", expressions: []any{map[string]any{"match": map[string]any{"op": "!=", "left": guardBinary("&", guardMeta("priority"), "0:3ff"), "right": "none"}}}},
+		} {
+			access.netdev[sourceGuard] = append(access.netdev[sourceGuard], nativeJoin(condition, nativeVerdict("goto", "native_bound_source")))
+		}
+		access.netdev[sourceGuard] = append(access.netdev[sourceGuard], nativeVerdict("return", ""))
+	}
 }

@@ -136,7 +136,7 @@ func validatePreparedGuardBatch(ctx context.Context, prepared *preparedGuardBatc
 	if prepared == nil {
 		return errors.New("firewall: missing prepared guarded transaction")
 	}
-	if !prepared.native && prepared.nat46Model != nil {
+	if !prepared.native && (prepared.nat46Model != nil || len(prepared.nat64Callbacks) != 0) {
 		return errors.New("firewall: nat46 guard model requires native preparation")
 	}
 	if prepared.native {
@@ -155,7 +155,7 @@ func validateGuardSeal(ctx context.Context, prepared *preparedGuardBatch) error 
 	if !batch.preparedAt.IsZero() || !batch.startBefore.IsZero() || !batch.startedAt.IsZero() {
 		return errors.New("firewall: sealing cannot carry authorization preparation")
 	}
-	commands, err := decodeGuardChanges(batch.data)
+	commands, err := decodePreparedGuardChanges(prepared)
 	if err != nil {
 		return err
 	}

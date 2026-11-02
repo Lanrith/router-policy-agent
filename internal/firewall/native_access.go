@@ -191,6 +191,9 @@ func (access *nativeAccess) add(chain string, parts ...nativeScope) {
 }
 
 func (access *nativeAccess) compile(ctx context.Context, set *nativeRuleSet, managed, interfaces []string) error {
+	// Both forwarding hooks call this boundary even when every rule has only
+	// mixed-family scopes. An empty chain returns to the ordered default deny.
+	access.inet["native_denies"] = nil
 	for _, hook := range []string{"guard_forward", "permit_flow"} {
 		if hook == "guard_forward" {
 			access.add(hook, nativeMangle("meta mark set meta mark & "+guardMarkKeep, guardMeta("mark"),
@@ -314,11 +317,15 @@ func (access *nativeAccess) checkCapacity(interfaces []string) error {
 }
 
 func (access *nativeAccess) compileDecision(index int, rule policy.NetworkRule, hook string, reply bool, managed []string) {
+	access.compileDecisionNamed("native", index, rule, hook, reply, managed, false)
+}
+
+func (access *nativeAccess) compileDecisionNamed(prefix string, index int, rule policy.NetworkRule, hook string, reply bool, managed []string, sourceOnly bool) {
 	direction, states := "original", []string{"established", "new"}
 	if reply {
 		direction, states = "reply", []string{"established"}
 	}
-	chain := fmt.Sprintf("native_%d_%s_%s", index, hook, direction)
+	chain := fmt.Sprintf("%s_%d_%s_%s", prefix, index, hook, direction)
 	state := nativeMatch("ct state { "+strings.Join(states, ", ")+" }", nativeCT("state"), map[string]any{"set": states})
 	if len(states) == 1 {
 		state = nativeState("established")
@@ -332,8 +339,15 @@ func (access *nativeAccess) compileDecision(index int, rule policy.NetworkRule, 
 		access.add(chain, nativeVerdict("jump", "native_grant"))
 		access.add(chain, nativeVerdict("goto", chain+"_delegated"))
 	} else {
+		interfaces, addresses := []string{"iifname", "oifname"}, []string{"saddr", "daddr"}
+		if sourceOnly {
+			// NAT64 carrier provenance describes the original source. A
+			// classified encoded target has separate wire authority and must
+			// not change this connection's source kind or epoch.
+			interfaces, addresses = interfaces[:1], addresses[:1]
+		}
 		for _, iface := range managed {
-			for _, field := range []string{"iifname", "oifname"} {
+			for _, field := range interfaces {
 				target := chain + "_source"
 				if rule.Authorization == "inherit" {
 					target = chain + "_directory"
@@ -343,7 +357,7 @@ func (access *nativeAccess) compileDecision(index int, rule policy.NetworkRule, 
 		}
 		access.add(chain, nativeMatch("ether saddr @"+cohortSet, guardPayload("ether", "saddr"), "@"+cohortSet), nativeVerdict("goto", chain+"_source"))
 		for _, family := range []struct{ protocol, set string }{{"ip", classified4Set}, {"ip6", classified6Set}} {
-			for _, field := range []string{"saddr", "daddr"} {
+			for _, field := range addresses {
 				access.add(chain, nativeMatch(family.protocol+" "+field+" @"+family.set, guardPayload(family.protocol, field), "@"+family.set), nativeVerdict("goto", chain+"_source"))
 			}
 		}
@@ -361,14 +375,14 @@ func (access *nativeAccess) compileDecision(index int, rule policy.NetworkRule, 
 		if configuration {
 			name = chain + "_configuration"
 		}
-		access.compileToken(name, index, hook, reply, configuration, false)
+		access.compileToken(name, prefix, index, hook, reply, configuration, false)
 	}
 	if rule.Authorization != "owner" {
-		access.compileToken(chain+"_delegated", index, hook, reply, false, true)
+		access.compileToken(chain+"_delegated", prefix, index, hook, reply, false, true)
 	}
 }
 
-func (access *nativeAccess) compileToken(chain string, index int, hook string, reply, configuration, directory bool) {
+func (access *nativeAccess) compileToken(chain, prefix string, index int, hook string, reply, configuration, directory bool) {
 	set, mapping, _, _ := nativeEpoch(configuration)
 	flowTag := nativeTag(configuration, reply)
 	if directory {
@@ -405,7 +419,7 @@ func (access *nativeAccess) compileToken(chain string, index int, hook string, r
 		if reply {
 			direction = "reply"
 		}
-		selection := fmt.Sprintf("native_%d_context_%s", index, direction)
+		selection := fmt.Sprintf("%s_%d_context_%s", prefix, index, direction)
 		if _, exists := access.inet[selection]; !exists {
 			access.add(selection, nativeVerdict("jump", "save_owner_priority"))
 			for _, packetContext := range access.contexts[index] {

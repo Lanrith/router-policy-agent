@@ -71,6 +71,15 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 	if ctx == nil || access == nil || len(transports) == 0 {
 		return errors.New("firewall: missing NAT64 flow dependencies")
 	}
+	// These are provisional routed kinds. The selected target physical gates
+	// still require exact tuples, current ownership, grants and both epochs.
+	targetKinds := []nativeScope{}
+	for _, directory := range []bool{false, true} {
+		for _, reply := range []bool{false, true} {
+			targetKinds = append(targetKinds, nativeJoin(nativeMark(0xff000000, nativeNAT64TargetTag(directory, reply)), nativeVerdict("return", "")))
+		}
+	}
+	access.inet["native_egress_kind"] = slices.Insert(access.inet["native_egress_kind"], 0, targetKinds...)
 	facts, err := nativeTranslationFacts(ctx)
 	if err != nil {
 		return err
@@ -80,24 +89,25 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 	}
 	original, reply, translatedReply := "native_n64_wire_original", "native_n64_wire_reply", "native_n64_translated_reply"
 	originalConfirm, replyConfirm, translatedReplyConfirm := original+"_confirm", reply+"_confirm", translatedReply+"_confirm"
-	access.add(original, nativeVerdict("jump", "validate_source"))
 	access.add(original, nativeVerdict("jump", "native_forward_floor"))
 	for _, iface := range access.managed {
 		access.add(original, nativeMatch(fmt.Sprintf("iifname %q", iface), guardMeta("iifname"), iface), nativeVerdict("jump", "native_source"))
 	}
-	access.add(originalConfirm, nativeVerdict("jump", "validate_source"))
 	access.add(originalConfirm, nativeVerdict("jump", "native_forward_floor"))
 	for _, iface := range access.managed {
 		access.add(originalConfirm, nativeMatch(fmt.Sprintf("iifname %q", iface), guardMeta("iifname"), iface), nativeVerdict("jump", "native_source"))
 	}
 	access.add(reply, nativeVerdict("jump", "native_forward_floor"))
 	access.add(reply, nativeVerdict("jump", "validate_source"))
+	for _, iface := range access.managed {
+		access.add(reply, nativeInterface("iifname", iface), nativeVerdict("jump", "native_source"))
+	}
 	access.add(replyConfirm, nativeVerdict("jump", "native_forward_floor"))
 	access.add(replyConfirm, nativeVerdict("jump", "validate_source"))
-	access.add(translatedReply, nativeVerdict("jump", "validate_source"))
-	access.add(translatedReplyConfirm, nativeVerdict("jump", "validate_source"))
+	for _, iface := range access.managed {
+		access.add(replyConfirm, nativeInterface("iifname", iface), nativeVerdict("jump", "native_source"))
+	}
 	for _, transport := range transports {
-		access.add(original, nativeVerdict("jump", transport.name+"_request"))
 		for _, leg := range transport.legs {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -107,16 +117,28 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 				grantGeometry := nativeJoin(leg.grantGeometry(true), leg.allocation(transport, true))
 				grant, delegated := nativeNAT64Grant(leg, true)
 				access.add(original, geometry, nativeVerdict("jump", leg.name+"_import"))
+				aliasSource := access.compileNAT64AliasSource(transport)
+				access.add(original, geometry, nativeVerdict("jump", aliasSource))
+				access.add(original, geometry, nativeVerdict("jump", transport.name+"_wire_order_original"))
 				access.add(original, geometry, nativeVerdict("jump", "native_translation_facts_capture"))
 				access.add(original, geometry, nativeNAT64CurrentConfiguration(false), nativeVerdict("accept", ""))
 				access.add(original, geometry, nativeNAT64CurrentSource(false), nativeVerdict("accept", ""))
 				if delegated {
 					access.add(original, grantGeometry, nativeNAT64CurrentDirectory(false, grant), nativeVerdict("accept", ""))
 				}
+				access.add(originalConfirm, geometry, nativeVerdict("jump", aliasSource))
+				access.add(originalConfirm, geometry, nativeVerdict("jump", transport.name+"_wire_order_original"))
+				access.add(originalConfirm, geometry, nativeVerdict("jump", "native_translation_facts_compare"))
 				access.add(originalConfirm, geometry, nativeNAT64CurrentConfiguration(false), nativeVerdict("accept", ""))
 				access.add(originalConfirm, geometry, nativeNAT64CurrentSource(false), nativeVerdict("accept", ""))
 				if delegated {
 					access.add(originalConfirm, grantGeometry, nativeNAT64CurrentDirectory(false, grant), nativeVerdict("accept", ""))
+				}
+				for _, hook := range []string{original, originalConfirm} {
+					access.add(hook, geometry, nativeNAT64CurrentTarget(leg, true, false), nativeVerdict("accept", ""))
+					if grant, ok := nativeNAT64TargetGrant(leg, true); ok {
+						access.add(hook, nativeJoin(leg.grantGeometry(true), leg.allocation(transport, true)), nativeNAT64CurrentTarget(leg, true, true), grant, nativeVerdict("accept", ""))
+					}
 				}
 				continue
 			}
@@ -124,11 +146,19 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 			wireGrantGeometry := nativeJoin(leg.grantGeometry(false), leg.allocation(transport, false))
 			wireGrant, wireDelegated := nativeNAT64Grant(leg, false)
 			access.add(reply, wireGeometry, nativeVerdict("jump", "native_translation_facts_restore"))
+			for _, directory := range []bool{false, true} {
+				access.add(reply, wireGeometry, nativeMark(0xff000000, nativeNAT64TargetTag(directory, true)), nativeVerdict("jump", "native_source"))
+			}
+			access.add(reply, wireGeometry, nativeVerdict("jump", transport.name+"_wire_order_reply"))
 			access.add(reply, wireGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(reply, wireGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if wireDelegated {
 				access.add(reply, wireGrantGeometry, nativeNAT64CurrentDirectory(true, wireGrant), nativeVerdict("accept", ""))
 			}
+			for _, directory := range []bool{false, true} {
+				access.add(replyConfirm, wireGeometry, nativeMark(0xff000000, nativeNAT64TargetTag(directory, true)), nativeVerdict("jump", "native_source"))
+			}
+			access.add(replyConfirm, wireGeometry, nativeVerdict("jump", transport.name+"_wire_order_reply"))
 			access.add(replyConfirm, wireGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(replyConfirm, wireGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if wireDelegated {
@@ -138,16 +168,32 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 			rawGrantGeometry := nativeJoin(leg.grantGeometry(true), leg.allocation(transport, true))
 			rawGrant, rawDelegated := nativeNAT64Grant(leg, true)
 			access.add(translatedReply, rawGeometry, nativeVerdict("jump", leg.name+"_import"))
+			translatedSource := access.compileNAT64TranslatedSource(transport, leg)
+			access.add(translatedReply, rawGeometry, nativeVerdict("jump", translatedSource))
 			access.add(translatedReply, rawGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(translatedReply, rawGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if rawDelegated {
 				access.add(translatedReply, rawGrantGeometry, nativeNAT64CurrentDirectory(true, rawGrant), nativeVerdict("accept", ""))
 			}
+			access.add(translatedReplyConfirm, rawGeometry, nativeVerdict("jump", translatedSource))
 			access.add(translatedReplyConfirm, rawGeometry, nativeNAT64CurrentConfiguration(true), nativeVerdict("accept", ""))
 			access.add(translatedReplyConfirm, rawGeometry, nativeNAT64CurrentSource(true), nativeVerdict("accept", ""))
 			if rawDelegated {
 				access.add(translatedReplyConfirm, rawGrantGeometry, nativeNAT64CurrentDirectory(true, rawGrant), nativeVerdict("accept", ""))
 			}
+			for _, hook := range []string{reply, replyConfirm} {
+				access.add(hook, wireGeometry, nativeNAT64CurrentTarget(leg, false, false), nativeVerdict("accept", ""))
+				if grant, ok := nativeNAT64TargetGrant(leg, false); ok {
+					access.add(hook, wireGrantGeometry, nativeNAT64CurrentTarget(leg, false, true), grant, nativeVerdict("accept", ""))
+				}
+			}
+			for _, hook := range []string{translatedReply, translatedReplyConfirm} {
+				access.add(hook, rawGeometry, nativeNAT64CurrentTarget(leg, true, false), nativeVerdict("accept", ""))
+				if grant, ok := nativeNAT64TargetGrant(leg, true); ok {
+					access.add(hook, rawGrantGeometry, nativeNAT64CurrentTarget(leg, true, true), grant, nativeVerdict("accept", ""))
+				}
+			}
+
 		}
 	}
 	for _, name := range []string{original, reply, translatedReply, originalConfirm, replyConfirm, translatedReplyConfirm} {
@@ -208,11 +254,26 @@ func (access *nativeAccess) compileNAT64Flows(ctx context.Context, transports []
 				if !leg.reply && !imported {
 					continue // raw originals retain projected first-match physical policy.
 				}
+				if _, ok := nativeNAT64TargetGrant(leg, imported); ok {
+					targetDirectory := access.compileNAT64TargetPhysical(transport, leg, imported, true)
+					physical = append(physical, nativeJoin(leg.physicalGeometry(imported), nativeMark(0xff000000, nativeNAT64TargetTag(true, leg.reply)), nativeVerdict("goto", targetDirectory)))
+				}
+				chain := access.compileNAT64TargetPhysical(transport, leg, imported, false)
+				physical = append(physical, nativeJoin(leg.physicalGeometry(imported), nativeMark(0xff000000, nativeNAT64TargetTag(false, leg.reply)), nativeVerdict("goto", chain)))
+				ownerContinuation, directoryContinuation := physicalChain, physicalDirectory
+				if leg.reply && !imported {
+					ownerContinuation = access.compileNAT64ReturnAlias(transport, false)
+					directoryContinuation = access.compileNAT64ReturnAlias(transport, true)
+				}
+				if leg.reply {
+					ownerContinuation = access.compileNAT64ReturnSender(transport, imported, ownerContinuation)
+					directoryContinuation = access.compileNAT64ReturnSender(transport, imported, directoryContinuation)
+				}
 				physical = append(physical, nativeJoin(leg.physicalGeometry(imported), nativeNAT64Kinds(leg.reply),
-					nativeVerdict("goto", physicalChain)))
+					nativeVerdict("goto", ownerContinuation)))
 				if grant, delegated := nativeNAT64Grant(leg, imported); delegated {
 					physical = append(physical, nativeJoin(leg.physicalGrantGeometry(imported), nativeMark(0xff000000, nativeDirectoryTag(leg.reply)),
-						nativeNAT64SourceLive(), grant, nativeVerdict("goto", physicalDirectory)))
+						nativeNAT64SourceLive(), grant, nativeVerdict("goto", directoryContinuation)))
 				}
 			}
 		}

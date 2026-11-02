@@ -69,19 +69,31 @@ func (prepared *preparedNAT64Allocations) expectedData(ctx context.Context) ([]b
 		map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: prepared.transport.name + "_active_aliases"}}},
 		map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: prepared.transport.name + "_sources"}}},
 	}
-	for index, name := range (&nativeNAT64Tokens{transport: prepared.transport}).names() {
+	for index := range prepared.transport.sourceScopes {
+		operations = append(operations, map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: prepared.transport.sourceScopeName(index)}}})
+	}
+	tokenNames := (&nativeNAT64Tokens{transport: prepared.transport}).names()
+	for _, name := range tokenNames {
 		kind := "map"
-		if index == 4 {
+		if (&nativeNAT64Tokens{transport: prepared.transport}).objectKind(name) == "set" {
 			kind = "set"
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
 	}
+	operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{Family: "netdev", Table: ownedTable, Name: prepared.transport.name + "_target_origins"}}})
+	operations = append(operations, prepared.transport.tupleProofClears()...)
 	if len(rows[prepared.transport.name+"_zones"]) != 0 {
 		operations = append(operations,
 			map[string]any{"add": map[string]any{"element": map[string]any{"family": "inet", "table": ownedTable, "name": prepared.transport.name + "_zones", "elem": rows[prepared.transport.name+"_zones"]}}},
 			map[string]any{"add": map[string]any{"element": map[string]any{"family": "inet", "table": ownedTable, "name": prepared.transport.name + "_aliases", "elem": rows[prepared.transport.name+"_aliases"]}}},
 			map[string]any{"add": map[string]any{"element": map[string]any{"family": "inet", "table": ownedTable, "name": prepared.transport.name + "_active_aliases", "elem": rows[prepared.transport.name+"_active_aliases"]}}},
 			map[string]any{"add": map[string]any{"element": map[string]any{"family": "inet", "table": ownedTable, "name": prepared.transport.name + "_sources", "elem": rows[prepared.transport.name+"_sources"]}}})
+	}
+	for index := range prepared.transport.sourceScopes {
+		name := prepared.transport.sourceScopeName(index)
+		if len(rows[name]) != 0 {
+			operations = append(operations, map[string]any{"add": map[string]any{"element": map[string]any{"family": "inet", "table": ownedTable, "name": name, "elem": rows[name]}}})
+		}
 	}
 	data, err := json.Marshal(map[string]any{"nftables": operations})
 	if err != nil || len(data) > maximumBatch {
@@ -114,6 +126,13 @@ func (prepared *preparedNAT64Allocations) elements(ctx context.Context) (map[str
 		prepared.transport.name + "_active_aliases": {},
 		prepared.transport.name + "_sources":        {},
 	}
+	if len(prepared.transport.sourceScopes) != 0 && len(entries) > (1<<22)/len(prepared.transport.sourceScopes) {
+		return nil, errors.New("firewall: NAT64 source scope derivation exceeds capacity")
+	}
+	for index := range prepared.transport.sourceScopes {
+		rows[prepared.transport.sourceScopeName(index)] = []json.RawMessage{}
+	}
+	scopeRows := 0
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -130,6 +149,21 @@ func (prepared *preparedNAT64Allocations) elements(ctx context.Context) (map[str
 			if err != nil {
 				return nil, errors.New("firewall: NAT64 allocation row encoding failed")
 			}
+			rows[name] = append(rows[name], encoded)
+		}
+		for index, prefix := range prepared.transport.sourceScopes {
+			if !prefix.Contains(entry.Source) {
+				continue
+			}
+			scopeRows++
+			if scopeRows > 65535 {
+				return nil, errors.New("firewall: NAT64 source scope rows exceed capacity")
+			}
+			encoded, err := json.Marshal(nativeTimedValue(entry.Alias.String(), prepared.timeout))
+			if err != nil {
+				return nil, errors.New("firewall: NAT64 source scope row encoding failed")
+			}
+			name := prepared.transport.sourceScopeName(index)
 			rows[name] = append(rows[name], encoded)
 		}
 	}
@@ -182,13 +216,19 @@ func nat64AllocationClearData(ctx context.Context, transport *nativeNAT64Transpo
 		map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: transport.name + "_active_aliases"}}},
 		map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: transport.name + "_sources"}}},
 	}
-	for index, name := range (&nativeNAT64Tokens{transport: transport}).names() {
+	for index := range transport.sourceScopes {
+		operations = append(operations, map[string]any{"flush": map[string]any{"set": objectReference{Family: "inet", Table: ownedTable, Name: transport.sourceScopeName(index)}}})
+	}
+	tokenNames := (&nativeNAT64Tokens{transport: transport}).names()
+	for _, name := range tokenNames {
 		kind := "map"
-		if index == 4 {
+		if (&nativeNAT64Tokens{transport: transport}).objectKind(name) == "set" {
 			kind = "set"
 		}
 		operations = append(operations, map[string]any{"flush": map[string]any{kind: objectReference{Family: "inet", Table: ownedTable, Name: name}}})
 	}
+	operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{Family: "netdev", Table: ownedTable, Name: transport.name + "_target_origins"}}})
+	operations = append(operations, transport.tupleProofClears()...)
 	return json.Marshal(map[string]any{"nftables": operations})
 }
 

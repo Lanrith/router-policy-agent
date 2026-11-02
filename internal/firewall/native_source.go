@@ -22,6 +22,7 @@ const (
 	nativeSourceLive4   = "native_source_live4"
 	nativeSourceLive6   = "native_source_live6"
 	nativeSourceBits4   = "native_source_bits4"
+	nativeSourceEpoch4  = "native_source_epoch4"
 	nativeSourceEpoch6  = "native_source_epoch6"
 	nativeSourceMask    = uint32(7 << 13)
 )
@@ -40,11 +41,13 @@ func nativeSourceDefinitions(family string) []string {
 			guardSetDefinition(nativeSourceLive4, "mark . classid"),
 			guardSetDefinition(nativeSourceLive6, "mark . classid"),
 			fmt.Sprintf("set %s { typeof meta mark . meta priority . @nh,96,32; flags timeout; timeout 90s; size %d; }", nativeSourceBits4, maximumTupleCount),
+			fmt.Sprintf("set %s { typeof meta priority . @nh,96,32; flags timeout; timeout 90s; size %d; }", nativeSourceEpoch4, maximumTupleCount),
 		}
 	}
 	if family == "netdev" {
 		return []string{fmt.Sprintf("map %s { type mark . classid : ipv4_addr; flags timeout; timeout 90s; size %d; }", nativeSourceAddresses4, maximumCohortSize),
 			guardSetDefinition(nativeSourceEpoch6, "classid . ipv6_addr"),
+			fmt.Sprintf("set %s { typeof meta priority . @nh,96,32; flags timeout; timeout 90s; size %d; }", nativeSourceEpoch4, maximumTupleCount),
 			fmt.Sprintf("map %s { type mark . classid : ipv6_addr; flags timeout; timeout 90s; size %d; }", nativeSourceAddresses6, maximumCohortSize),
 			fmt.Sprintf("set %s { typeof meta mark . meta priority . @nh,96,32; flags timeout; timeout 90s; size %d; }", nativeSourceBits4, maximumTupleCount),
 			guardSetDefinition(nativeSource4, "mark . classid . ipv4_addr"),
@@ -66,6 +69,7 @@ func nativeSourceReferences() []objectReference {
 		{Family: "inet", Table: ownedTable, Name: nativeSource4},
 		{Family: "inet", Table: ownedTable, Name: nativeSource6},
 		{Family: "inet", Table: ownedTable, Name: nativeSourceBits4},
+		{Family: "inet", Table: ownedTable, Name: nativeSourceEpoch4},
 		{Family: "inet", Table: ownedTable, Name: nativeSourceLive4},
 		{Family: "inet", Table: ownedTable, Name: nativeSourceLive6},
 		{Family: "netdev", Table: ownedTable, Name: nativeSourceBits4},
@@ -74,6 +78,7 @@ func nativeSourceReferences() []objectReference {
 		{Family: "netdev", Table: ownedTable, Name: nativeSourceLive6},
 		{Family: "netdev", Table: ownedTable, Name: nativeSource6},
 		{Family: "netdev", Table: ownedTable, Name: nativeSourceEpoch6},
+		{Family: "netdev", Table: ownedTable, Name: nativeSourceEpoch4},
 	}
 }
 
@@ -195,6 +200,8 @@ func nativeSourceChanges(ctx context.Context, snapshot policy.OwnershipSnapshot,
 			raw := address.Address.As4()
 			key := map[string]any{"concat": []any{(id >> 10) << 13, nativeLowClassID(id), binary.BigEndian.Uint32(raw[:])}}
 			values[nativeSourceBits4] = append(values[nativeSourceBits4], nativeTimedValue(key, min(timeouts[index], epochTimeout)))
+			epochKey := map[string]any{"concat": []any{epochClassID(base), binary.BigEndian.Uint32(raw[:])}}
+			values[nativeSourceEpoch4] = append(values[nativeSourceEpoch4], nativeTimedValue(epochKey, min(timeouts[index], epochTimeout)))
 		} else {
 			key := map[string]any{"concat": []any{epochClassID(base), address.Address.String()}}
 			values[nativeSourceEpoch6] = append(values[nativeSourceEpoch6], nativeTimedValue(key, min(timeouts[index], epochTimeout)))

@@ -64,6 +64,39 @@ The collector must revalidate actual association/ownership, not stamp a cache
 with the current time. Losing process-local timing on restart therefore cannot
 make a persisted directory observation or old ownership evidence fresh again.
 
+For a named ownership model, the service waits for the independent producer's
+first qualified post-start publication before accepting requests or reporting
+readiness. The wait has a fixed 90-second deadline and rereads the producer at
+250 ms intervals. Only an explicit incomplete publication or otherwise valid
+pre-start evidence can wait. Unsafe files, malformed records, future timestamps,
+expired evidence and conflicting ownership fail startup immediately. The helper
+never changes a producer timestamp. Deny-only history remains installed and
+application permits remain closed throughout the wait.
+
+During normal supervision, an explicit incomplete publication clears ownership
+and application permits. After successful sealing, the helper checks for a new
+publication at 250 ms intervals without restarting. A cleanup failure is fatal.
+Recovered bindings can restore independently qualified ownership; they cannot
+restore a directory grant. The reader must submit a new directory observation.
+
+The native binding publisher uses the same explicit negative envelope before
+reading journal, lease or placement sources: schema 1, a nonempty generation,
+the invalidation timestamp, `complete: false` and an empty record list. A source
+failure leaves that envelope in place. Its timestamp records invalidation only;
+the loader returns `binding.ErrIncomplete`, so it supplies no ownership evidence
+and cannot extend a grant. Successful exports retain their original association,
+lease-observation and expiry values. Omitting negative-envelope metadata would
+make an ordinary pending collection indistinguishable from malformed input.
+
+When systemd supplies `NOTIFY_SOCKET`, the executable sends the fixed `READY=1`
+notification only after closed startup and qualified binding initialization.
+Use `Type=notify`, `NotifyAccess=main` and a startup deadline above 90 seconds
+(Lanrith uses 100 seconds). No notify socket is required for standalone operation.
+The notification does not establish directory reachability, authorization or
+full-image acceptance. A platform selecting these units must select a component
+release that implements this handoff; development-candidate results do not admit
+an older pinned release.
+
 The apply callback receives `policy.Authorization`, not an editable candidate.
 The helper captures its age anchor before collecting compile-time UTC. The
 compiler owns the resulting grants; diagnostic/state snapshots are deep copies.

@@ -66,8 +66,8 @@ func (model *nativeNAT46Model) compileWirePolicy(ctx context.Context, originalRu
 	if physical {
 		family = "physical"
 	}
-	name := fmt.Sprintf("native_n46_policy_%d_%s_%d_%d_%s_%s", mappingIndex, protocol, originalRule, original.id, direction, family)
-	program := &nativeNAT46Policy{entry: name, grant: fmt.Sprintf("native_n46_grant_%d_%s_%s_%s", mappingIndex, protocol, direction, family), chains: map[string][]nativeScope{}}
+	name := fmt.Sprintf("%s_policy_%d_%s_%d_%d_%s_%s", model.policyNamespace(), mappingIndex, protocol, originalRule, original.id, direction, family)
+	program := &nativeNAT46Policy{entry: name, grant: fmt.Sprintf("%s_grant_%d_%s_%s_%s", model.policyNamespace(), mappingIndex, protocol, direction, family), chains: map[string][]nativeScope{}}
 	ordered := name + "_ordered"
 	checks := nativeMark(uint64(ownershipRuleMask), original.id)
 	if !physical {
@@ -160,7 +160,7 @@ func (model *nativeNAT46Model) wireScopes(ctx context.Context, ruleIndex, mappin
 	}
 	rule, mapping := model.rules.rules[ruleIndex], model.mappings[mappingIndex]
 	if original.family == 6 || rule.Family == 6 || rule.Protocol != "any" && rule.Protocol != protocol ||
-		!nativeNAT46Destination(rule.To, mapping, false) {
+		!nativeMappedDestination(rule.To, mapping, model.translator(), false) {
 		return nil, ctx.Err()
 	}
 	// Count reachable original alternatives before allocating predicates or
@@ -191,7 +191,7 @@ func (model *nativeNAT46Model) wireScopes(ctx context.Context, ruleIndex, mappin
 			if !prefix.IsValid() {
 				prefix = netip.PrefixFrom(netip.IPv4Unspecified(), 0)
 			}
-			projected.From = append(projected.From, policy.NetworkSelector{Interface: "nat46",
+			projected.From = append(projected.From, policy.NetworkSelector{Interface: model.translator(),
 				Addresses: []netip.Prefix{nativeNAT46SourcePrefix(model.prefix, prefix)}})
 		}
 	}

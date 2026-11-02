@@ -99,11 +99,9 @@ func (b *guardedBackend) apply(
 	if err != nil {
 		return err
 	}
-	if sources := b.options.profile.layout.nat46Sources(); sources != nil {
-		owned, err = sources.model.translatedClassification(ctx, owned)
-		if err != nil {
-			return err
-		}
+	owned, err = b.options.profile.layout.translatedClassification(ctx, owned)
+	if err != nil {
+		return err
 	}
 	history = owned
 	prepared, publication, err := b.prepareApplication(ctx, authorization, history)
@@ -131,6 +129,9 @@ func (b *guardedBackend) commitApplication(ctx context.Context, prepared *prepar
 	}
 	var post []byte
 	err := b.options.generation.with(ctx, b.options.expected, func(bounded context.Context) error {
+		if err := b.checkNAT64GrantOrigins(prepared); err != nil {
+			return err
+		}
 		if b.nativeOwnership != publication || b.pendingNativeOwnership != nil {
 			return errors.New("firewall: source publication changed during grant preparation")
 		}
@@ -144,6 +145,9 @@ func (b *guardedBackend) commitApplication(ctx context.Context, prepared *prepar
 	// snapshot. No success is returned until independent inspection passes.
 	// This adds no lease time and never substitutes a newer source receipt.
 	err = b.options.generation.with(ctx, b.options.expected, func(bounded context.Context) error {
+		if err := b.checkNAT64GrantOrigins(prepared); err != nil {
+			return err
+		}
 		if b.nativeOwnership != publication || b.pendingNativeOwnership != nil {
 			return errors.New("firewall: source publication changed before grant verification")
 		}
@@ -205,8 +209,13 @@ func (b *guardedBackend) prepareApplication(
 	history state.Classification,
 ) (*preparedGuardBatch, *nativeSourcePublication, error) {
 	options := b.options
+	history, err := options.profile.layout.translatedClassification(ctx, history)
+	if err != nil {
+		return nil, nil, err
+	}
 	var observation *rulesetObservation
 	var publication *nativeSourcePublication
+	var grantOrigins []*nativeNAT64GrantOrigin
 	if err := options.generation.with(ctx, options.expected, func(bounded context.Context) error {
 		p := options.executor
 		if err := p.acquire(bounded); err != nil {
@@ -219,6 +228,9 @@ func (b *guardedBackend) prepareApplication(
 		var err error
 		observation, err = p.observeProfile(bounded, options.profile)
 		publication = b.nativeOwnership
+		if err == nil {
+			grantOrigins, err = b.nativeNAT64GrantOrigins()
+		}
 		return err
 	}); err != nil {
 		return nil, nil, fmt.Errorf("firewall: inspect preparation baseline: %w", err)
@@ -247,11 +259,11 @@ func (b *guardedBackend) prepareApplication(
 			prepared, err = prepareNativeNAT46Guards(ctx, mapped, publication, sources.model, logical.preparedAt)
 			if err == nil {
 				if transports := options.profile.layout.native.selectedNAT64Transports(); len(transports) != 0 {
-					prepared, err = attachNativeNAT64Grants(ctx, prepared, publication, transports)
+					prepared, err = attachNativeNAT64Grants(ctx, prepared, publication, transports, grantOrigins...)
 				}
 			}
 		} else if transports := options.profile.layout.native.selectedNAT64Transports(); len(transports) != 0 {
-			prepared, err = prepareNativeNAT64AggregateGuards(ctx, mapped, publication, transports, logical.preparedAt)
+			prepared, err = prepareNativeNAT64AggregateGuards(ctx, mapped, publication, transports, logical.preparedAt, grantOrigins...)
 		} else {
 			prepared, err = prepareNativeGuardsWithSource(ctx, mapped, publication, source.BaselineHash, logical.preparedAt)
 		}
@@ -340,11 +352,9 @@ func (p *process) sealGuarded(
 		slices.Sort(*values)
 		*values = slices.Compact(*values)
 	}
-	if sources := layout.nat46Sources(); sources != nil {
-		history, err = sources.model.translatedClassification(ctx, history)
-		if err != nil {
-			return sealingObservation{}, err
-		}
+	history, err = layout.translatedClassification(ctx, history)
+	if err != nil {
+		return sealingObservation{}, err
 	}
 	prepared, err := prepareMappedGuardSeal(ctx, history, layout.translationPaths)
 	if err == nil && layout.native != nil {
@@ -484,6 +494,11 @@ func inspectSealingGuards(
 	if layout.nat46Sources() != nil {
 		additional = append(additional, nativeNAT46TargetGrantRefs()...)
 	}
+	callbacks, err := layout.nat64CallbackModels()
+	if err != nil {
+		return nil, empty, err
+	}
+	additional = append(additional, nativeNAT64CallbackGrantRefs(callbacks)...)
 	for _, ref := range additional {
 		observation := inet
 		if ref.Family == "netdev" {
@@ -499,6 +514,7 @@ func inspectSealingGuards(
 		cohort: macs, addresses4: addresses4, addresses6: addresses6,
 		managedInterfaces: slices.Clone(layout.managedInterfaces), leases: leaseElements,
 		translationPaths: slices.Clone(layout.translationPaths),
+		nat64Callbacks:   slices.Clone(callbacks),
 	}
 	if sources := layout.nat46Sources(); sources != nil {
 		inventory.nat46Model = sources.model

@@ -41,8 +41,12 @@ func prepareNativeNAT64AggregateSourceRefresh(
 }
 
 func attachNativeNAT64SourceMode(ctx context.Context, prepared *preparedOwnership, transports []*nativeNAT64Transport) (*preparedOwnership, error) {
-	if prepared == nil || prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(transports) == 0 {
+	if prepared == nil || prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(prepared.nat64Callbacks) != 0 || len(transports) == 0 {
 		return nil, errors.New("firewall: invalid NAT64 source mode attachment")
+	}
+	callbacks, err := nativeNAT64CallbackModels(transports)
+	if err != nil {
+		return nil, err
 	}
 	baselineHash := transports[0].baselineHash
 	for _, transport := range transports {
@@ -52,11 +56,11 @@ func attachNativeNAT64SourceMode(ctx context.Context, prepared *preparedOwnershi
 	}
 	next := *prepared
 	next.nat64Transports = slices.Clone(transports)
+	next.nat64Callbacks = slices.Clone(callbacks)
 	if len(transports) == 1 {
 		next.nat64Transport = transports[0]
 	}
 	snapshot := policy.OwnershipSnapshot{}
-	var err error
 	if !next.clear {
 		snapshot, err = next.evidence.Snapshot(ctx)
 		if err != nil {
@@ -93,13 +97,20 @@ func preparedOwnershipNAT64Transports(prepared *preparedOwnership) ([]*nativeNAT
 	transports := slices.Clone(prepared.nat64Transports)
 	switch {
 	case len(transports) == 0 && prepared.nat64Transport == nil:
+		if len(prepared.nat64Callbacks) != 0 {
+			return nil, errors.New("firewall: callback source preparation lost original transport")
+		}
 		return nil, nil
 	case len(transports) == 0:
-		return []*nativeNAT64Transport{prepared.nat64Transport}, nil
+		transports = []*nativeNAT64Transport{prepared.nat64Transport}
 	case len(transports) == 1 && prepared.nat64Transport != transports[0]:
 		return nil, errors.New("firewall: singular NAT64 source selector changed")
 	case len(transports) > 1 && prepared.nat64Transport != nil:
 		return nil, errors.New("firewall: aggregate NAT64 source mode acquired a singular selector")
+	}
+	callbacks, err := nativeNAT64CallbackModels(transports)
+	if err != nil || !slices.Equal(callbacks, prepared.nat64Callbacks) {
+		return nil, errors.New("firewall: callback source preparation changed original model")
 	}
 	return transports, nil
 }
@@ -140,7 +151,8 @@ func (prepared *preparedOwnership) expectedNAT64SourceRefreshData(
 	if err := json.Unmarshal(data, &transaction); err != nil {
 		return nil, errors.New("firewall: invalid original NAT64 source transition")
 	}
-	for _, ref := range nativeNAT64GrantRefs() {
+	refs := append(nativeNAT64GrantRefs(), nativeNAT64CallbackGrantRefs(prepared.nat64Callbacks)...)
+	for _, ref := range refs {
 		command, err := json.Marshal(map[string]any{"flush": map[string]any{"set": ref}})
 		if err != nil {
 			return nil, err

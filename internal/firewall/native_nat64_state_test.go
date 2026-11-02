@@ -53,10 +53,19 @@ func TestAggregateNAT64StateIsOneExactKernelTransaction(t *testing.T) {
 	var transaction struct {
 		Operations []json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(prepared.data, &transaction); err != nil || len(transaction.Operations) != 28 {
+	expectedOperations := 48 * len(transports)
+	for _, transport := range transports {
+		expectedOperations += len(transport.sourceScopes)
+	}
+	if err := json.Unmarshal(prepared.data, &transaction); err != nil || len(transaction.Operations) != expectedOperations {
 		t.Fatal("aggregate NAT64 state did not retain every component operation", len(transaction.Operations), err)
 	}
 	for _, transport := range transports {
+		for index := range transport.sourceScopes {
+			if !bytes.Contains(prepared.data, []byte(transport.sourceScopeName(index))) {
+				t.Fatal("aggregate NAT64 revocation omitted a source scope", transport.component, index)
+			}
+		}
 		for _, suffix := range []string{"_zones", "_aliases", "_active_aliases", "_sources", "_tokens", "_token_epoch_pairs"} {
 			if !bytes.Contains(prepared.data, []byte(transport.name+suffix)) {
 				t.Fatal("aggregate NAT64 state omitted a selected component object", transport.component, suffix)

@@ -22,7 +22,7 @@ type nat64TokenPlanFixture struct {
 	sources       *nativeSourcePublication
 }
 
-func newNAT64TokenPlanFixture(t *testing.T, withSources bool) nat64TokenPlanFixture {
+func newNAT64TokenPlanFixture(t *testing.T, withSources bool, dynamic ...bool) nat64TokenPlanFixture {
 	t.Helper()
 	b := nat64TransportFixture(t)
 	b.NetworkModel.Rules = []policy.NetworkRule{{
@@ -31,11 +31,15 @@ func newNAT64TokenPlanFixture(t *testing.T, withSources bool) nat64TokenPlanFixt
 		To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}},
 	}}
 	b.NAT64[0].SourceMappings = []policy.NAT64SourceMapping{{Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10"), Ready: true}}
+	allocations := b.NAT64[0].SourceMappings
+	if len(dynamic) == 1 && dynamic[0] {
+		b.NAT64[0].SourceMappings = nil
+	}
 	transport, err := newNativeNAT64Transport(t.Context(), b, "nat64-internal")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledger, err := transport.geometry.Capture(t.Context(), transport.component, nil, b.NAT64[0].SourceMappings)
+	ledger, err := transport.geometry.Capture(t.Context(), transport.component, nil, allocations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +98,7 @@ func TestNAT64TokensAreDerivedFromCompilerOwnedConfigurationAndSources(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tokens.entries) != 6 {
+	if len(tokens.entries) != 5 {
 		t.Fatal("NAT64 registry omitted a compiler-valid owner, configuration, or directory state", len(tokens.entries))
 	}
 	kinds := []uint32{}
@@ -102,7 +106,7 @@ func TestNAT64TokensAreDerivedFromCompilerOwnedConfigurationAndSources(t *testin
 		kinds = append(kinds, entry.context&0xff000000)
 	}
 	slices.Sort(kinds)
-	if !slices.Equal(kinds, []uint32{0xd1000000, 0xd2000000, 0xd3000000, 0xd4000000, 0xd5000000, 0xd6000000}) {
+	if !slices.Equal(kinds, []uint32{0xd1000000, 0xd2000000, 0xd3000000, 0xd4000000, 0xd6000000}) {
 		t.Fatal("NAT64 registry changed its independently checked authorization classes", kinds)
 	}
 	data, err := tokens.publicationData(t.Context())
@@ -121,7 +125,7 @@ func TestNAT64TokensAreDerivedFromCompilerOwnedConfigurationAndSources(t *testin
 	}
 }
 
-func TestNAT64TokenDerivationRepresentsNoPermitAsTypedRevocation(t *testing.T) {
+func TestNAT64DirectoryCandidateCarriesNoFinalPermissionWithoutSources(t *testing.T) {
 	t.Parallel()
 	b := nat64TransportFixture(t)
 	b.NetworkModel.Rules = []policy.NetworkRule{{
@@ -158,12 +162,61 @@ func TestNAT64TokenDerivationRepresentsNoPermitAsTypedRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !tokens.clear || len(tokens.entries) != 0 || tokens.origin != nil {
-		t.Fatal("directory-only NAT64 without a current source was not represented as an explicit token revocation")
+	if tokens.clear || len(tokens.entries) != 1 || uint64(tokens.entries[0].context&0xff000000) != nativeTag(true, false) {
+		t.Fatal("directory-only NAT64 did not retain only source connectivity without final permission")
 	}
 	data, err := tokens.publicationData(t.Context())
-	if err != nil || bytes.Contains(data, []byte(`"add"`)) {
-		t.Fatal("zero-permit NAT64 token plan was not a valid clear-only publication", err)
+	if err != nil || !bytes.Contains(data, []byte(`"add"`)) {
+		t.Fatal("source connectivity registry did not retain its original compiler proof", err)
+	}
+}
+
+func TestNAT64EmptyAllocatorStartsSealedBeforeTheFirstClient(t *testing.T) {
+	t.Parallel()
+	b := nat64TransportFixture(t)
+	b.NetworkModel.Rules = []policy.NetworkRule{{Action: "allow", Authorization: "owner", Protocol: "any",
+		From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("fdca:1a2b::/64")}},
+		To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}}}}
+	layout, err := newNativeNAT64AccessLayout(t.Context(), b, "nat64-internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := layout.native.nat64Transport
+	empty, err := transport.geometry.Capture(t.Context(), transport.component, nil, []policy.NAT64SourceMapping{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := policy.New(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := compiler.CompileOwnerConfiguration(t.Context(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, empty, configuration, nil, time.Now().UTC())
+	if err != nil {
+		t.Fatal("valid empty allocator prevents sealed startup", err)
+	}
+	data, err := tokens.publicationData(t.Context())
+	if err != nil || !tokens.clear || tokens.origin != nil || bytes.Contains(data, []byte(`"add"`)) {
+		t.Fatal("empty allocator acquired positive packet authority", err)
+	}
+	if _, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, empty, policy.OwnerConfiguration{}, nil, time.Now().UTC()); err == nil {
+		t.Fatal("empty allocator bypassed original configuration validation")
+	}
+	if _, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, nil, configuration, nil, time.Now().UTC()); err == nil {
+		t.Fatal("missing allocator was treated as a valid empty ledger")
+	}
+	first, err := transport.geometry.Capture(t.Context(), transport.component, empty, []policy.NAT64SourceMapping{
+		{Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := deriveNativeNAT64Tokens(t.Context(), transport, layout.native, first, configuration, nil, time.Now().UTC())
+	if err != nil || active.clear || active.origin == nil || len(active.entries) == 0 {
+		t.Fatal("first real allocation could not derive its ordinary owner tokens", err)
 	}
 }
 

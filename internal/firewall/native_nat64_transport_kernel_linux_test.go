@@ -120,6 +120,13 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	chains := transport.chains()
+	facts, err := nativeTranslationFacts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeNativeChains(chains, facts); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range nativeChainNames(chains) {
 		lines = append(lines, "chain "+name+" {")
 		lines = append(lines, nativeRulesText(chains[name])...)
@@ -158,9 +165,14 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 			}
 			lines = append(lines, "jump "+leg.name+"_"+operation)
 			if imported {
+				if !leg.reply {
+					// The synthetic admission caller now binds its actual wire
+					// rule; tuple import supplies only original provenance.
+					lines = append(lines, "ct mark 0 ct status confirmed drop", "ct mark 0 ct state new ct mark set 0x1c00")
+				}
 				lines = append(lines, "jump check_import")
 				if !leg.reply {
-					lines = append(lines, "ct zone != 0 drop")
+					lines = append(lines, "ct zone != 0 drop", "jump native_translation_facts_capture")
 				}
 			}
 			lines = append(lines, "counter name "+caller+"_end", "accept", "}")
@@ -169,6 +181,7 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 	}
 	lines = append(lines, forward...)
 	lines = append(lines, "}", "}")
+	lines = append(lines, "table netdev "+ownedTable+" {", "map "+transport.name+"_target_origins { type mark . classid : classid; size 65536; }", "}")
 	lines = append(lines, `table netdev n64_identity_endpoints {
  chain peer_endpoint {type filter hook ingress device "peer0" priority 0;policy drop;}
  chain device_endpoint {type filter hook ingress device "device0" priority 0;policy drop;}
@@ -192,7 +205,7 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 		if t.Failed() {
 			logNAT64IdentityFixture(cleanup, t)
 		}
-		packetNft(cleanup, t, "delete table inet "+ownedTable+";delete table netdev n64_identity_endpoints")
+		packetNft(cleanup, t, "delete table inet "+ownedTable+";delete table netdev "+ownedTable+";delete table netdev n64_identity_endpoints")
 	})
 	readiness := startNAT64IdentityTranslator(ctx, t, b.NAT64[0], transport, allocations)
 	peer, device := packetSocket(t, "peer0"), packetSocket(t, "device0")
@@ -276,10 +289,15 @@ func TestKernelNamedNAT64AllocationIdentity(t *testing.T) {
 	}
 	inspect := []struct{ kind, name string }{{"map", transport.name + "_zones"}, {"map", transport.name + "_aliases"},
 		{"set", transport.name + "_active_aliases"}, {"set", transport.name + "_sources"},
-		{"map", transport.name + "_tokens"}, {"map", transport.name + "_token_epoch"}, {"map", transport.name + "_token_context"}, {"map", transport.name + "_token_channel"},
+		{"map", transport.name + "_tokens"}, {"map", transport.name + "_token_epoch"}, {"map", transport.name + "_token_context"}, {"map", transport.name + "_token_channel"}, {"map", transport.name + "_token_origin"}, {"map", transport.name + "_export_channel"},
 		{"set", transport.name + "_token_epoch_pairs"}}
 	for _, leg := range transport.legs {
 		inspect = append(inspect, struct{ kind, name string }{"map", leg.name + "_proof"})
+		if leg.reply {
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				inspect = append(inspect, struct{ kind, name string }{"map", leg.name + suffix})
+			}
+		}
 	}
 	for _, object := range inspect {
 		// #nosec G204 -- Names originate in the reviewed synthetic fixture.

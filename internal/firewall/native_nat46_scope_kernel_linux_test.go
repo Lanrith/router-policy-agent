@@ -20,34 +20,52 @@ import (
 // use the production typed projection and listener leaf. This is not shared
 // runtime activation or qualification of a directory/binding producer.
 func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
+	testKernelNamedMappedOrderedWirePolicy(t, false)
+}
+
+func TestKernelNamedNAT64CallbackOrderedWirePolicy(t *testing.T) {
+	testKernelNamedMappedOrderedWirePolicy(t, true)
+}
+
+func testKernelNamedMappedOrderedWirePolicy(t *testing.T, callback bool) {
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	setupPacketLinks(ctx, t)
-	packetIP(ctx, t, "link", "add", "nat46", "type", "veth", "peer", "name", "translated0")
+	component, prefixText, aliasText := "nat46", "fdca:1a2b:e046::/96", "10.250.0.20"
+	if callback {
+		component, prefixText, aliasText = "nat64-internal", "fdca:1a2b:e064::/96", "10.251.0.20"
+	}
+	packetIP(ctx, t, "link", "add", component, "type", "veth", "peer", "name", "translated0")
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
 		defer done()
-		packetIP(cleanup, t, "link", "delete", "nat46")
+		packetIP(cleanup, t, "link", "delete", component)
 	})
-	for _, link := range []struct{ name, mac string }{{"nat46", "02:00:00:00:01:46"}, {"translated0", "02:00:00:00:00:46"}} {
+	for _, link := range []struct{ name, mac string }{{component, "02:00:00:00:01:46"}, {"translated0", "02:00:00:00:00:46"}} {
 		packetIP(ctx, t, "link", "set", link.name, "address", link.mac)
 		packetIP(ctx, t, "link", "set", link.name, "up")
 	}
-	prefix := netip.MustParsePrefix("fdca:1a2b:e046::/96")
-	client := netip.MustParseAddr("fdca:1a2b:e046::af0:a")
+	prefix := netip.MustParsePrefix(prefixText)
+	client := nativeNAT46SourcePrefix(prefix, netip.MustParsePrefix("10.240.0.10/32")).Addr()
 	target := netip.MustParseAddr("fdca:1a2b:3::10")
-	packetIP(ctx, t, "-6", "route", "add", prefix.String(), "dev", "nat46")
-	packetIP(ctx, t, "neighbor", "replace", client.String(), "dev", "nat46", "lladdr", "02:00:00:00:00:46", "nud", "permanent")
+	packetIP(ctx, t, "-6", "route", "add", prefix.String(), "dev", component)
+	packetIP(ctx, t, "neighbor", "replace", client.String(), "dev", component, "lladdr", "02:00:00:00:00:46", "nud", "permanent")
 	b := nativeAccessBaseline(t)
 	b.NetworkModel.NAT46Prefix = &prefix
 	b.NAT46Pools = sourceClassPrefixes("10.250.0.0/24")
-	b.NAT46 = []policy.NAT46{{ID: "mapped", Alias: netip.MustParseAddr("10.250.0.20"), Target: target, Ready: true}}
+	b.NAT46 = []policy.NAT46{{ID: "mapped", Alias: netip.MustParseAddr(aliasText), Target: target, Ready: true}}
 	b.NetworkModel.ManagedNetworks = []policy.Role{}
 	base := policy.NetworkRule{Action: "allow", Authorization: "owner", Protocol: "tcp",
 		From: []policy.NetworkSelector{{Interface: "lan10", Addresses: sourceClassPrefixes("10.240.0.0/24")}},
 		To:   []policy.NetworkSelector{{Interface: "lan13", Addresses: sourceClassPrefixes("fdca:1a2b:3::/64")}}}
+	if callback {
+		// Exercise the independent component class behind an intentionally
+		// broad owner rule. Ordinary per-source predicates must not be the
+		// only reason an ineligible or chained caller is rejected.
+		base.From[0].Addresses = nil
+	}
 	deny, directory, owner, udp, echo := base, base, base, base, base
 	deny.Action, deny.Authorization = "deny", "inherit"
 	deny.Protocol = "any"
@@ -57,9 +75,35 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 	udp.Protocol, udp.Ports = "udp", []uint16{6053}
 	echo.Protocol = "icmp"
 	b.NetworkModel.Rules = []policy.NetworkRule{deny, directory, owner, udp, echo}
-	model, err := newNativeNAT46Model(ctx, b)
+	var model *nativeNAT46Model
+	var callbackModel *nativeNAT64CallbackModel
+	var err error
+	if callback {
+		b.NetworkModel.NAT46Prefix, b.NAT46Pools, b.NAT46 = nil, []netip.Prefix{}, []policy.NAT46{}
+		pool := netip.MustParsePrefix("10.251.0.0/24")
+		b.NAT64 = []policy.NAT64{{ID: component, Prefix: prefix, Scope: "private", SourcePool: &pool,
+			SourceMappings: []policy.NAT64SourceMapping{{Source: target, Alias: netip.MustParseAddr(aliasText), Ready: true}}}}
+		transport, buildErr := newNativeNAT64Transport(ctx, b, component)
+		if buildErr != nil {
+			t.Fatal(buildErr)
+		}
+		proof, buildErr := newNativeNAT64CallbackTransport(ctx, transport)
+		if buildErr != nil {
+			t.Fatal(buildErr)
+		}
+		callbackModel, err = newNativeNAT64CallbackModel(ctx, b, proof)
+		if err == nil {
+			model = callbackModel.mapped
+		}
+	} else {
+		model, err = newNativeNAT46Model(ctx, b)
+	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	wirePolicy := model.wirePolicy
+	if callback {
+		wirePolicy = callbackModel.wirePolicy
 	}
 	facts, err := nativeTranslationFacts(ctx)
 	if err != nil {
@@ -87,7 +131,7 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 			for _, protocol := range []string{"tcp", "udp", "icmp"} {
 				for _, reply := range []bool{false, true} {
 					original := nativePacketContext{iface: "lan10", family: 4, id: uint64(index + 1)}
-					program, err := model.wirePolicy(ctx, index, 0, original, protocol, reply, physical)
+					program, err := wirePolicy(ctx, index, 0, original, protocol, reply, physical)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -125,7 +169,7 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 		} else {
 			lines = append(lines, `chain late_mutation {type filter hook egress device "lan13" priority -1;policy accept;}`,
 				"chain before_device {type filter hook egress device \"lan13\" priority 0;policy drop; jump before;}",
-				"chain before_translator {type filter hook egress device \"nat46\" priority 0;policy drop; jump before;}", "chain before {")
+				"chain before_translator {type filter hook egress device \""+component+"\" priority 0;policy drop; jump before;}", "chain before {")
 		}
 		for index := 1; index < len(b.NetworkModel.Rules); index++ {
 			for _, protocol := range []string{"tcp", "udp", "icmp"} {
@@ -207,6 +251,13 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 			isICMP: protocol == "icmp", icmpType: 128, icmpData: 0x4e460001,
 		}
 		transmit(original, translated, device, true)
+		if callback {
+			for _, caller := range []string{"8.8.8.8/32", "10.251.0.21/32", "127.0.0.1/32", "169.254.0.1/32"} {
+				wrong := original
+				wrong.source = nativeNAT46SourcePrefix(prefix, netip.MustParsePrefix(caller)).Addr()
+				transmit(wrong, translated, device, false)
+			}
+		}
 		reply := original
 		reply.source, reply.destination = target, client
 		reply.sourcePort, reply.destinationPort = original.destinationPort, original.sourcePort
@@ -214,7 +265,7 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 		reply.tcpFlags, reply.icmpType = 18, 129
 		transmit(reply, device, translated, true)
 		wrong := original
-		wrong.source = netip.MustParseAddr("fdca:1a2b:e046::af0:c")
+		wrong.source = nativeNAT46SourcePrefix(prefix, netip.MustParsePrefix("10.240.0.12/32")).Addr()
 		transmit(wrong, translated, device, false)
 		wrong = original
 		wrong.sourcePort++
@@ -267,7 +318,7 @@ func TestKernelNamedNAT46OrderedWirePolicy(t *testing.T) {
 	wrongInterface := ownerFrame
 	wrongInterface.sourceMAC, wrongInterface.destinationMAC = "02:00:00:00:00:10", "02:00:00:00:01:10"
 	transmit(wrongInterface, packetSocket(t, "peer0"), device, false)
-	for _, mutation := range []string{"tcp dport set 6062", "ip6 saddr set fdca:1a2b:e046::af0:c", "meta mark set 0xd5000003"} {
+	for _, mutation := range []string{"tcp dport set 6062", "ip6 saddr set " + nativeNAT46SourcePrefix(prefix, netip.MustParsePrefix("10.240.0.12/32")).Addr().String(), "meta mark set 0xd5000003"} {
 		publishGrants(43)
 		packetNft(ctx, t, "add rule netdev "+table+" late_mutation "+mutation)
 		transmit(ownerFrame, translated, device, false)

@@ -70,7 +70,18 @@ func publishBindings(
 	if ctx == nil || root == nil || collect == nil || !validBindingPublisher(options) {
 		return Collection{}, errors.New("radius: incomplete binding publisher inputs")
 	}
-	incomplete := binding.Snapshot{SchemaVersion: 1, Records: []binding.Record{}}
+	// This timestamp describes invalidation, not source evidence. The loader
+	// returns ErrIncomplete for this envelope; it cannot refresh ownership or
+	// grant deadlines. Keep the metadata valid so a stalled read remains the
+	// explicit deny-only state rather than a malformed-export startup failure.
+	invalidatedAt := time.Now().UTC()
+	incomplete := binding.Snapshot{
+		SchemaVersion: 1,
+		Generation:    digest("collector-incomplete", invalidatedAt.Format(time.RFC3339Nano)),
+		ObservedAt:    invalidatedAt,
+		Complete:      false,
+		Records:       []binding.Record{},
+	}
 	if err := writeBindings(ctx, root, incomplete); err != nil {
 		return Collection{}, err
 	}

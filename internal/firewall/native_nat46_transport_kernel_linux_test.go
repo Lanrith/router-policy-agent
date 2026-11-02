@@ -17,43 +17,88 @@ import (
 // This qualifies metadata transport, with an independent synthetic caller
 // checking grants. It does not install shared router-policy translator hooks.
 func TestKernelNamedNAT46TupleTransport(t *testing.T) {
+	testKernelNamedMappedTupleTransport(t, false)
+}
+
+func TestKernelNamedNAT64CallbackTupleTransport(t *testing.T) {
+	testKernelNamedMappedTupleTransport(t, true)
+}
+
+func testKernelNamedMappedTupleTransport(t *testing.T, callback bool) {
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	setupPacketLinks(ctx, t)
-	packetIP(ctx, t, "link", "add", "nat46", "type", "veth", "peer", "name", "translated0")
+	component, poolText, prefixText := "nat46", "10.250.0.0/24", "fdca:1a2b:e046::/96"
+	if callback {
+		component, poolText, prefixText = "nat64-internal", "10.251.0.0/24", "fdca:1a2b:e064::/96"
+	}
+	pool, prefix := netip.MustParsePrefix(poolText), netip.MustParsePrefix(prefixText)
+	packetIP(ctx, t, "link", "add", component, "type", "veth", "peer", "name", "translated0")
 	t.Cleanup(func() {
 		cleanup, done := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
 		defer done()
-		packetIP(cleanup, t, "link", "delete", "nat46")
+		packetIP(cleanup, t, "link", "delete", component)
 	})
-	for _, e := range []struct{ name, mac string }{{"nat46", "02:00:00:00:01:46"}, {"translated0", "02:00:00:00:00:46"}} {
+	for _, e := range []struct{ name, mac string }{{component, "02:00:00:00:01:46"}, {"translated0", "02:00:00:00:00:46"}} {
 		packetIP(ctx, t, "link", "set", e.name, "address", e.mac)
 		packetIP(ctx, t, "link", "set", e.name, "up")
 	}
 	b := nativeAccessBaseline(t)
-	prefix := netip.MustParsePrefix("fdca:1a2b:e046::/96")
-	b.NetworkModel.NAT46Prefix = &prefix
-	b.NAT46Pools = sourceClassPrefixes("10.250.0.0/24")
+	if callback {
+		b.NAT64 = []policy.NAT64{{ID: component, Prefix: prefix, Scope: "private", SourcePool: &pool}}
+	} else {
+		b.NetworkModel.NAT46Prefix = &prefix
+		b.NAT46Pools = []netip.Prefix{pool}
+	}
 	for i := range 6 {
-		alias := netip.MustParseAddr(fmt.Sprintf("10.250.0.%d", 20+i))
+		alias := pool.Addr()
+		for range 20 + i {
+			alias = alias.Next()
+		}
 		target := netip.MustParseAddr(fmt.Sprintf("fdca:1a2b:3::%x", 16+i))
-		b.NAT46 = append(b.NAT46, policy.NAT46{ID: fmt.Sprintf("mapped%d", i), Alias: alias, Target: target, Ready: true})
-		packetIP(ctx, t, "neighbor", "replace", alias.String(), "dev", "nat46", "lladdr", "02:00:00:00:00:46", "nud", "permanent")
+		if callback {
+			b.NAT64[0].SourceMappings = append(b.NAT64[0].SourceMappings, policy.NAT64SourceMapping{Source: target, Alias: alias, Ready: true})
+		} else {
+			b.NAT46 = append(b.NAT46, policy.NAT46{ID: fmt.Sprintf("mapped%d", i), Alias: alias, Target: target, Ready: true})
+		}
+		packetIP(ctx, t, "neighbor", "replace", alias.String(), "dev", component, "lladdr", "02:00:00:00:00:46", "nud", "permanent")
 		packetIP(ctx, t, "neighbor", "replace", target.String(), "dev", "lan13", "lladdr", "02:00:00:00:00:13", "nud", "permanent")
 	}
-	embedded := netip.MustParseAddr("fdca:1a2b:e046::af0:a")
-	packetIP(ctx, t, "route", "add", "10.250.0.0/24", "dev", "nat46")
-	packetIP(ctx, t, "-6", "route", "add", prefix.String(), "dev", "nat46")
-	packetIP(ctx, t, "neighbor", "replace", embedded.String(), "dev", "nat46", "lladdr", "02:00:00:00:00:46", "nud", "permanent")
-	model, err := newNativeNAT46Model(ctx, b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport, err := newNativeNAT46Transport(ctx, model)
-	if err != nil {
-		t.Fatal(err)
+	embedded := nativeNAT46SourcePrefix(prefix, netip.MustParsePrefix("10.240.0.10/32")).Addr()
+	packetIP(ctx, t, "route", "add", poolText, "dev", component)
+	packetIP(ctx, t, "-6", "route", "add", prefix.String(), "dev", component)
+	packetIP(ctx, t, "neighbor", "replace", embedded.String(), "dev", component, "lladdr", "02:00:00:00:00:46", "nud", "permanent")
+	var model *nativeNAT46Model
+	var transport *nativeNAT46Transport
+	var callbacks *nativeNAT64CallbackTransport
+	if callback {
+		native, err := newNativeNAT64Transport(ctx, b, component)
+		if err != nil {
+			t.Fatal(err)
+		}
+		callbacks, err = newNativeNAT64CallbackTransport(ctx, native)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport = callbacks.proof
+		model = &nativeNAT46Model{prefix: prefix}
+		for _, leg := range transport.legs {
+			if leg.protocol == "udp" && !leg.reply {
+				model.mappings = append(model.mappings, leg.mapping)
+			}
+		}
+	} else {
+		var err error
+		model, err = newNativeNAT46Model(ctx, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport, err = newNativeNAT46Transport(ctx, model)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	const table = ownedTable
 	lines := []string{"table inet " + table + " {",
@@ -64,8 +109,15 @@ func TestKernelNamedNAT46TupleTransport(t *testing.T) {
 		"chain epoch_stamp {ct mark 0 ct mark set 0x1c03; return;}",
 		"chain original_stamp { meta l4proto icmp meta mark set 0xd1000001 meta priority set 0x1c01 return; meta mark set 0xd5000001 meta priority set 0x1c01; return;}",
 		"chain reply_stamp {meta l4proto ipv6-icmp meta mark set 0xd2000001 meta priority set 0x1c01 return; meta mark set 0xd6000001 meta priority set 0x1c01; return;}"}
-	lines = append(lines, transport.definitions()...)
+	if callbacks != nil {
+		lines = append(lines, callbacks.native.definitions()...)
+	} else {
+		lines = append(lines, transport.definitions()...)
+	}
 	chains := transport.chains()
+	if callbacks != nil {
+		chains = callbacks.chains()
+	}
 	for _, name := range nativeChainNames(chains) {
 		lines = append(lines, "chain "+name+" {")
 		lines = append(lines, nativeRulesText(chains[name])...)
@@ -101,8 +153,16 @@ func TestKernelNamedNAT46TupleTransport(t *testing.T) {
 	}
 	forward = append(forward, "}")
 	lines = append(lines, forward...)
+	if callbacks != nil {
+		lines = append(lines, "chain callback_zone {type filter hook prerouting priority -300;policy accept;")
+		lines = append(lines, nativeRulesText(callbacks.native.zoneRules())...)
+		lines = append(lines, "}")
+	}
 	lines = append(lines, "}", "table netdev "+table+" {")
 	lines = append(lines, nativeSourceDefinitions("netdev")...)
+	if callbacks != nil {
+		lines = append(lines, "map "+callbacks.native.name+"_target_origins {type mark . classid : classid;size 65536;}")
+	}
 	lines = append(lines, epochChannelDefinitions(false, "netdev")...)
 	for _, leg := range transport.legs {
 		lines = append(lines, "chain "+leg.name+"_physical {")
@@ -140,8 +200,33 @@ func TestKernelNamedNAT46TupleTransport(t *testing.T) {
 		packetNft(cleanup, t, "delete table inet "+table+"; delete table netdev "+table+"; delete table netdev nat46_transport_endpoints")
 	})
 	packetNft(ctx, t, "add element netdev "+table+" "+nativeSourceBits4+" {0 . 0:1 . 0x0af0000a}; add element netdev "+table+" "+nativeSource4+" {0 . 0:1 . 10.240.0.10}; add element netdev "+table+" ownership_egress_epoch {0x1c00}")
+	var allocations *preparedNAT64Allocations
+	var ledger *policy.NAT64AllocationLedger
+	var readiness *testNAT64Readiness
+	if callbacks != nil {
+		native := callbacks.native
+		var err error
+		ledger, err = native.geometry.Capture(ctx, native.component, nil, native.mappings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries, err := ledger.Snapshot(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		readiness = &testNAT64Readiness{transport: native, entries: entries, ready: true}
+		allocations, err = prepareNativeNAT64Allocations(ctx, native, ledger, readiness)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executeGuardFixture(ctx, t, allocations.batch.data)
+	}
 	inspectNAT46PhysicalFixture(ctx, t, transport)
-	inspectNAT46TransportFixture(ctx, t, transport)
+	if callbacks != nil {
+		inspectNAT46TransportFixture(ctx, t, transport, callbacks.schema())
+	} else {
+		inspectNAT46TransportFixture(ctx, t, transport)
+	}
 	peer, device, translated := packetSocket(t, "peer0"), packetSocket(t, "device0"), packetSocket(t, "translated0")
 	serial := 0
 	transmit := func(value packetDatagram, input, output packetEndpoint, allowed bool) {
@@ -282,7 +367,7 @@ func TestKernelNamedNAT46TupleTransport(t *testing.T) {
 	// UID cannot use it after the translated packet passed the inet checks.
 	packetNft(ctx, t, "add element netdev "+table+" "+nativeSourceBits4+" {0 . 0:2 . 0x0af0000b}")
 	for _, mutation := range []string{
-		"ip6 saddr set fdca:1a2b:e046::af0:b",
+		"ip6 saddr set " + nativeNAT46SourcePrefix(prefix, netip.MustParsePrefix("10.240.0.11/32")).Addr().String(),
 		"meta priority set 0x1c02",
 		"meta mark set 0xd5002001",
 		"meta mark set 0xd3000001",
@@ -361,6 +446,24 @@ func TestKernelNamedNAT46TupleTransport(t *testing.T) {
 	transmit(wire, translated, device, false)
 	transmit(initial, peer, translated, true)
 	transmit(wire, translated, device, true)
+	if callbacks != nil {
+		withdrawal, err := prepareNativeNAT64AllocationClear(ctx, callbacks.native)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executeGuardFixture(ctx, t, withdrawal.batch.data)
+		transmit(initial, peer, translated, false)
+		transmit(wire, translated, device, false)
+		// A refreshed allocation cannot restore its withdrawn callback proof.
+		fresh, err := prepareNativeNAT64Allocations(ctx, callbacks.native, ledger, readiness)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executeGuardFixture(ctx, t, fresh.batch.data)
+		transmit(wire, translated, device, false)
+		transmit(initial, peer, translated, true)
+		transmit(wire, translated, device, true)
+	}
 }
 
 func inspectNAT46PhysicalFixture(ctx context.Context, t *testing.T, transport *nativeNAT46Transport) {
@@ -412,12 +515,15 @@ func inspectNAT46PhysicalFixture(ctx context.Context, t *testing.T, transport *n
 	}
 }
 
-func inspectNAT46TransportFixture(ctx context.Context, t *testing.T, transport *nativeNAT46Transport) {
+func inspectNAT46TransportFixture(ctx context.Context, t *testing.T, transport *nativeNAT46Transport, selected ...*guardTableSchema) {
 	t.Helper()
 	const table = ownedTable
 	// Verify the production body's complete graph against the actual kernel
 	// listing. Synthetic caller scopes are deliberately outside this schema.
 	schema := transport.schema()
+	if len(selected) == 1 {
+		schema = selected[0]
+	}
 	var listed struct {
 		Objects []json.RawMessage `json:"nftables"`
 	}

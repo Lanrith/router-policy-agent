@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
+	"sync/atomic"
 )
 
 // Freeze only independently compiled code-owned expectations, before exposing
@@ -14,6 +16,10 @@ import (
 func (layout *guardLayout) freezeInspectionSchemas(ctx context.Context) error {
 	if ctx == nil || layout == nil || layout.inspectionSchemas != nil {
 		return errors.New("firewall: missing or already frozen inspection layout")
+	}
+	callbacks, err := layout.nat64CallbackModels()
+	if err != nil {
+		return err
 	}
 	compiled := map[string]*guardTableSchema{}
 	for _, family := range []string{"inet", "netdev"} {
@@ -48,6 +54,7 @@ func (layout *guardLayout) freezeInspectionSchemas(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	layout.callbackModels = slices.Clone(callbacks)
 	layout.inspectionSchemas = compiled
 	return nil
 }
@@ -56,7 +63,10 @@ func (schema *guardTableSchema) freezeFields(ctx context.Context, key string, he
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	fields := &guardCompiledFields{encoded: map[string][]byte{}, values: map[string]any{}}
+	fields := &guardCompiledFields{
+		encoded: map[string][]byte{}, values: map[string]any{},
+		verified: map[string]*atomic.Pointer[guardVerifiedEncoding]{},
+	}
 	for name, value := range header {
 		encoded, err := json.Marshal(value)
 		if err != nil {
@@ -71,6 +81,7 @@ func (schema *guardTableSchema) freezeFields(ctx context.Context, key string, he
 			return errors.New("firewall: invalid normalized inspection field")
 		}
 		fields.encoded[name], fields.values[name] = encoded, value
+		fields.verified[name] = &atomic.Pointer[guardVerifiedEncoding]{}
 	}
 	schema.encoded[key] = fields
 	return nil

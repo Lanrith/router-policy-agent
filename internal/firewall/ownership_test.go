@@ -114,7 +114,7 @@ func TestOwnershipClearContainsOnlyFixedRevocations(t *testing.T) {
 	if err := json.Unmarshal(prepared.batch.data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if len(decoded.Commands) != 8 {
+	if len(decoded.Commands) != 9 {
 		t.Fatal("ownership revocation omitted fixed mirrors")
 	}
 	for _, command := range decoded.Commands {

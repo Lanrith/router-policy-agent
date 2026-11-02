@@ -21,16 +21,16 @@ type nativeAsymmetricScope struct {
 }
 
 func (scope nativeAsymmetricScope) predicate(physical bool) nativeScope {
-	protocol := "tcp"
-	if scope.mode == "icmp_echo_reply" {
-		protocol = "icmpv6"
-	}
-	result := nativeScopePredicate(protocol, 6,
+	// The typed flags/type payload below supplies the transport dependency.
+	// nft omits a redundant l4proto expression from its native listing.
+	result := nativeScopePredicate("any", 6,
 		policy.NetworkSelector{Interface: scope.sourceInterface},
 		policy.NetworkSelector{Interface: scope.targetInterface},
 		scope.from, scope.to, 0, false, physical)
 	if scope.mode == "tcp_dsr" {
-		flags := map[string]any{"set": []string{"syn", "ack", "rst"}}
+		// A flag mask is a bitwise OR, not membership in a literal set. nft
+		// prints the mask in flag-bit order independently of its input spelling.
+		flags := map[string]any{"|": []string{"syn", "rst", "ack"}}
 		return nativeJoin(result, nativeMatch("tcp flags & (syn | ack | rst) == ack",
 			guardBinary("&", guardPayload("tcp", "flags"), flags), "ack"))
 	}

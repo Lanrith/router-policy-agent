@@ -48,6 +48,11 @@ func nativeSourceSchema(schema *guardTableSchema, family string) {
 	rawHeader := guardSetHeader(family, nativeSourceBits4, rawType, maximumTupleCount)
 	rawHeader["flags"], rawHeader["timeout"] = []string{"timeout"}, 90
 	schema.sets[nativeSourceBits4] = rawHeader
+	epochType := map[string]any{"typeof": map[string]any{"concat": []any{guardMeta("priority"),
+		map[string]any{"payload": map[string]any{"base": "nh", "offset": 96, "len": 32}}}}}
+	epochHeader := guardSetHeader(family, nativeSourceEpoch4, epochType, maximumTupleCount)
+	epochHeader["flags"], epochHeader["timeout"] = []string{"timeout"}, 90
+	schema.sets[nativeSourceEpoch4] = epochHeader
 	if family == "inet" {
 		schema.sets[nativeSource4] = guardLeaseHeader(family, nativeSource4, []string{"mark", "classid", "ipv4_addr"})
 		schema.sets[nativeSource6] = guardLeaseHeader(family, nativeSource6, []string{"mark", "classid", "ipv6_addr"})
@@ -219,6 +224,7 @@ func (layout *guardLayout) inspectNativeSources(ctx context.Context, inet, netde
 		addresses := []json.RawMessage{}
 		live := []json.RawMessage{}
 		raw4 := []json.RawMessage{}
+		epoch4 := []json.RawMessage{}
 		epoch6 := []json.RawMessage{}
 		for _, raw := range bindings {
 			var binding struct {
@@ -268,6 +274,12 @@ func (layout *guardLayout) inspectNativeSources(ctx context.Context, inet, netde
 					return err
 				}
 				raw4 = append(raw4, row)
+				epochKey := map[string]any{"concat": []any{epochClassID(epoch.Value), binary.BigEndian.Uint32(bits[:])}}
+				epochRow, err := json.Marshal(nativeTimedValue(epochKey, min(binding.Timeout, epoch.Timeout)))
+				if err != nil {
+					return err
+				}
+				epoch4 = append(epoch4, epochRow)
 			} else {
 				key := map[string]any{"concat": []any{epochClassID(epoch.Value), fields[2]}}
 				row, err := json.Marshal(nativeTimedValue(key, min(binding.Timeout, epoch.Timeout)))
@@ -298,6 +310,13 @@ func (layout *guardLayout) inspectNativeSources(ctx context.Context, inet, netde
 					return err
 				}
 				if err := sameGuardElements(ctx, actual, raw4); err != nil {
+					return err
+				}
+				epochRows, err := listedGuardLeases(ctx, observation.sets[nativeSourceEpoch4].Elements)
+				if err != nil {
+					return err
+				}
+				if err := sameGuardElements(ctx, epochRows, epoch4); err != nil {
 					return err
 				}
 			}

@@ -60,3 +60,21 @@ func TestNAT64BackendActivationRequiresExactSelectedComponentSet(t *testing.T) {
 		t.Fatal("rejected activation retained runtime authority")
 	}
 }
+
+func TestNAT64GrantCommitCannotAdoptAnotherRuntimeOrigin(t *testing.T) {
+	t.Parallel()
+	prepared, original, proof := preparedDynamicNAT64GrantFixture(t)
+	backend := &guardedBackend{nat64Origins: []*nativeNAT64BackendOrigin{{transport: original.transport, ledger: original.ledger, readiness: proof, grants: original}}}
+	if err := backend.checkNAT64GrantOrigins(prepared); err != nil {
+		t.Fatal(err)
+	}
+	copied := *original
+	backend.nat64Origins[0].grants = &copied
+	if err := backend.checkNAT64GrantOrigins(prepared); err == nil {
+		t.Fatal("queued grant adopted a later runtime activation")
+	}
+	backend.nat64Origins = nil
+	if err := backend.checkNAT64GrantOrigins(prepared); err == nil {
+		t.Fatal("queued grant survived runtime origin withdrawal")
+	}
+}

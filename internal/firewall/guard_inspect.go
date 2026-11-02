@@ -24,6 +24,7 @@ type guardInventory struct {
 	managedInterfaces []string
 	translationPaths  []deviceTranslationPath
 	nat46Model        *nativeNAT46Model
+	nat64Callbacks    []*nativeNAT64CallbackModel
 	leases            int
 }
 
@@ -94,6 +95,10 @@ func (layout *guardLayout) inspectObservations(ctx context.Context, inet, netdev
 	}
 	if sources := layout.nat46Sources(); sources != nil {
 		inventory.nat46Model = sources.model
+	}
+	inventory.nat64Callbacks, err = layout.nat64CallbackModels()
+	if err != nil {
+		return nil, err
 	}
 	if err := layout.inspectOwnership(ctx, inet, netdev); err != nil {
 		return nil, err
@@ -373,8 +378,7 @@ func checkGuardObjectWithFields(fields map[string]json.RawMessage, expected map[
 				continue
 			}
 			if compiled.values != nil {
-				observed, err := fixedGuardValue(actual)
-				if err != nil || !equalFixedGuardValues(value, observed) {
+				if !compiled.equalValue(name, actual, wanted, value) {
 					return 0, errors.New("firewall: fixed guard field differs from compiled expectation")
 				}
 				continue

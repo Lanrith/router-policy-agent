@@ -18,6 +18,7 @@ type nativeNAT64BackendOrigin struct {
 	ledger        *policy.NAT64AllocationLedger
 	readiness     nativeNAT64Readiness
 	configuration policy.OwnerConfiguration
+	grants        *nativeNAT64GrantOrigin
 }
 
 // nativeNAT64Activation is helper-local wiring from a translator supervisor.
@@ -80,6 +81,7 @@ func (b *guardedBackend) activateNAT64Components(
 		}
 		origins = append(origins, &nativeNAT64BackendOrigin{
 			transport: transport, ledger: activation.Ledger, readiness: activation.Readiness, configuration: configuration,
+			grants: &nativeNAT64GrantOrigin{transport: transport, ledger: activation.Ledger, readiness: activation.Readiness},
 		})
 	}
 	defer func() {
@@ -269,4 +271,35 @@ func (b *guardedBackend) clearNAT64(ctx context.Context) error {
 	}
 	_, err := b.options.profile.ruleset.inspect(ctx, layout, post)
 	return err
+}
+
+// Called only under the shared writer fence. Return original memory objects so
+// queued grant preparation cannot adopt another activation's allocation view.
+func (b *guardedBackend) nativeNAT64GrantOrigins() ([]*nativeNAT64GrantOrigin, error) {
+	origins := b.nat64Origins
+	if len(origins) == 0 && b.nat64Origin != nil {
+		origins = []*nativeNAT64BackendOrigin{b.nat64Origin}
+	}
+	if len(origins) == 0 {
+		return nil, nil
+	}
+	grants := make([]*nativeNAT64GrantOrigin, 0, len(origins))
+	for _, origin := range origins {
+		if origin == nil || origin.grants == nil || origin.grants.transport != origin.transport || origin.grants.ledger != origin.ledger || origin.grants.readiness == nil {
+			return nil, errors.New("firewall: NAT64 grant origin lost its runtime activation")
+		}
+		grants = append(grants, origin.grants)
+	}
+	return grants, nil
+}
+
+func (b *guardedBackend) checkNAT64GrantOrigins(prepared *preparedGuardBatch) error {
+	if prepared == nil {
+		return errors.New("firewall: missing original NAT64 grant application")
+	}
+	current, err := b.nativeNAT64GrantOrigins()
+	if err != nil || !slices.Equal(current, prepared.nat64GrantOrigins) {
+		return errors.New("firewall: NAT64 activation changed during grant preparation")
+	}
+	return nil
 }

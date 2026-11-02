@@ -141,6 +141,28 @@ func setupPacketLinks(ctx context.Context, t *testing.T) {
 	}
 }
 
+// AF_PACKET observes delivery before netdev ingress. These unconfigured raw
+// endpoints must discard the observed frame before the host routes it again.
+// Counters distinguish one delivered datagram from a recirculated old probe.
+func setupPacketEndpointSinks(ctx context.Context, t *testing.T, table string) {
+	t.Helper()
+	packetNft(ctx, t, "table netdev "+table+` {
+ counter peer_datagrams {}
+ counter device_datagrams {}
+ chain peer_sink {type filter hook ingress device "peer0" priority 0;policy drop;
+  meta l4proto udp counter name peer_datagrams
+ }
+ chain device_sink {type filter hook ingress device "device0" priority 0;policy drop;
+  meta l4proto udp counter name device_datagrams
+ }
+}`)
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Second)
+		defer cancel()
+		packetNft(cleanup, t, "delete table netdev "+table)
+	})
+}
+
 func packetIP(ctx context.Context, t *testing.T, arguments ...string) {
 	t.Helper()
 	// #nosec G204 -- Synthetic test-only operations in an acknowledged empty namespace.
@@ -450,7 +472,11 @@ func receivePacket(ctx context.Context, t *testing.T, endpoint packetEndpoint, s
 			continue
 		}
 		if !expected {
-			t.Fatal("final egress drop leaked the synthetic packet")
+			hop := 22
+			if header == 54 {
+				hop = 21
+			}
+			t.Fatalf("final egress drop leaked the synthetic packet (hop limit %d)", buffer[hop])
 		}
 		addressStart, hop := 26, 22
 		if header == 54 {

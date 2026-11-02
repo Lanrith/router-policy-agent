@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
 
 func nativeNAT64GrantRefs() []objectReference {
-	refs := make([]objectReference, 0, 8)
+	refs := make([]objectReference, 0, 16)
 	for _, family := range []string{"inet", "netdev"} {
 		for _, protocol := range []string{"tcp", "udp"} {
 			for _, version := range []int{4, 6} {
-				refs = append(refs, objectReference{Family: family, Table: ownedTable, Name: fmt.Sprintf("native_n64_from%d_%s", version, protocol)})
+				for _, direction := range []string{"from", "to"} {
+					refs = append(refs, objectReference{Family: family, Table: ownedTable, Name: fmt.Sprintf("native_n64_%s%d_%s", direction, version, protocol)})
+				}
 			}
 		}
 	}
@@ -31,7 +34,7 @@ func nativeNAT64GrantDefinitions(family string) []string {
 			continue
 		}
 		address := "ipv4_addr"
-		if ref.Name == "native_n64_from6_tcp" || ref.Name == "native_n64_from6_udp" {
+		if strings.Contains(ref.Name, "6_") {
 			address = "ipv6_addr"
 		}
 		definitions = append(definitions, guardSetDefinition(ref.Name, "classid . mark . "+address+" . inet_service"))
@@ -45,7 +48,7 @@ func nativeNAT64GrantSchema(schema *guardTableSchema, family string) {
 			continue
 		}
 		address := "ipv4_addr"
-		if ref.Name == "native_n64_from6_tcp" || ref.Name == "native_n64_from6_udp" {
+		if strings.Contains(ref.Name, "6_") {
 			address = "ipv6_addr"
 		}
 		schema.sets[ref.Name] = guardLeaseHeader(family, ref.Name, []string{"classid", "mark", address, "inet_service"})
@@ -57,6 +60,7 @@ func (transport *nativeNAT64Transport) projectGrants(
 	logical guardChanges,
 	publication *nativeSourcePublication,
 	utc, anchor time.Time,
+	selected []policy.NAT64SourceMapping,
 ) ([]change, error) {
 	if ctx == nil || transport == nil || transport.geometry == nil || !generationHash(transport.baselineHash) ||
 		publication == nil || utc.IsZero() || anchor.IsZero() || anchor.Before(publication.startedAt) || time.Since(anchor) < 0 {
@@ -86,8 +90,10 @@ func (transport *nativeNAT64Transport) projectGrants(
 		indexes[identity] = index
 	}
 	mappings := map[netip.Addr]policy.NAT64SourceMapping{}
-	for _, mapping := range transport.mappings {
-		mappings[mapping.Source] = mapping
+	for _, mapping := range selected {
+		if mapping.Ready {
+			mappings[mapping.Source] = mapping
+		}
 	}
 	values := map[string]map[string]int{}
 	for _, ref := range nativeNAT64GrantRefs() {
@@ -164,6 +170,15 @@ func (transport *nativeNAT64Transport) projectGrants(
 			}
 		}
 	}
+	targetValues, err := transport.projectTargetValues(ctx, logical, publication, utc, anchor, selected)
+	if err != nil {
+		return nil, err
+	}
+	for name, rows := range targetValues {
+		for key, timeout := range rows {
+			values[name][key] = max(values[name][key], timeout)
+		}
+	}
 	commands := []change{}
 	for _, ref := range nativeNAT64GrantRefs() {
 		commands = append(commands, change{Flush: &setChange{Set: ref}})
@@ -193,6 +208,7 @@ func expandNativeNAT64Grants(
 	publication *nativeSourcePublication,
 	transports []*nativeNAT64Transport,
 	utc, anchor time.Time,
+	origins ...*nativeNAT64GrantOrigin,
 ) ([]byte, error) {
 	if ctx == nil || len(transports) == 0 {
 		return nil, errors.New("firewall: missing NAT64 grant geometry")
@@ -209,15 +225,43 @@ func expandNativeNAT64Grants(
 	for _, ref := range nativeNAT64GrantRefs() {
 		values[ref.Name] = map[string]timedGrant{}
 	}
+	selected, err := nativeNAT64GrantMappings(ctx, transports, origins)
+	if err != nil {
+		return nil, err
+	}
+	callbacks, err := nativeNAT64CallbackModels(transports)
+	if err != nil {
+		return nil, err
+	}
+	callbackCommands := []change{}
+	for index, model := range callbacks {
+		if model == nil {
+			continue
+		}
+		projected, err := model.targetGrantClears()
+		if err != nil {
+			return nil, err
+		}
+		if publication != nil {
+			if len(origins) != len(transports) {
+				return nil, errors.New("firewall: callback grants require their original runtime activation")
+			}
+			projected, err = model.projectTargetGrants(ctx, changes, publication, utc, anchor, origins[index])
+			if err != nil {
+				return nil, err
+			}
+		}
+		callbackCommands = append(callbackCommands, projected...)
+	}
 	baselineHash := transports[0].baselineHash
-	for _, transport := range transports {
+	for index, transport := range transports {
 		if transport == nil || !generationHash(transport.baselineHash) || transport.baselineHash != baselineHash {
 			return nil, errors.New("firewall: inconsistent NAT64 grant geometry")
 		}
 		if publication == nil {
 			continue
 		}
-		projected, projectErr := transport.projectGrants(ctx, changes, publication, utc, anchor)
+		projected, projectErr := transport.projectGrants(ctx, changes, publication, utc, anchor, selected[index])
 		if projectErr != nil {
 			return nil, projectErr
 		}
@@ -263,6 +307,7 @@ func expandNativeNAT64Grants(
 		}
 	}
 	changes.Commands = append(changes.Commands, extra...)
+	changes.Commands = append(changes.Commands, callbackCommands...)
 	encoded, err := json.Marshal(changes)
 	if err != nil || len(encoded) > maximumBatch {
 		return nil, errors.New("firewall: NAT64 grant transaction exceeds capacity")
@@ -276,24 +321,35 @@ func prepareNativeNAT64Guards(
 	publication *nativeSourcePublication,
 	transport *nativeNAT64Transport,
 	utc time.Time,
+	origins ...*nativeNAT64GrantOrigin,
 ) (*preparedGuardBatch, error) {
-	return prepareNativeNAT64AggregateGuards(ctx, source, publication, []*nativeNAT64Transport{transport}, utc)
+	return prepareNativeNAT64AggregateGuards(ctx, source, publication, []*nativeNAT64Transport{transport}, utc, origins...)
 }
 
 func preparedNativeNAT64Transports(prepared *preparedGuardBatch) ([]*nativeNAT64Transport, error) {
 	if prepared == nil {
 		return nil, errors.New("firewall: missing NAT64 grant preparation")
 	}
+	if len(prepared.nat64GrantOrigins) != 0 && (prepared.sourcePublication == nil || prepared.nat64Transport == nil && len(prepared.nat64Transports) == 0) {
+		return nil, errors.New("firewall: NAT64 grant origins lost their source or selected model")
+	}
 	transports := slices.Clone(prepared.nat64Transports)
 	switch {
 	case len(transports) == 0 && prepared.nat64Transport == nil:
+		if len(prepared.nat64Callbacks) != 0 {
+			return nil, errors.New("firewall: callback grants lost their selected transport")
+		}
 		return nil, nil
 	case len(transports) == 0:
-		return []*nativeNAT64Transport{prepared.nat64Transport}, nil
+		transports = []*nativeNAT64Transport{prepared.nat64Transport}
 	case len(transports) == 1 && prepared.nat64Transport != transports[0]:
 		return nil, errors.New("firewall: singular NAT64 grant selector changed")
 	case len(transports) > 1 && prepared.nat64Transport != nil:
 		return nil, errors.New("firewall: aggregate NAT64 grants acquired a singular selector")
+	}
+	models, err := nativeNAT64CallbackModels(transports)
+	if err != nil || !slices.Equal(models, prepared.nat64Callbacks) {
+		return nil, errors.New("firewall: callback grant model changed its original selection")
 	}
 	return transports, nil
 }
@@ -304,6 +360,7 @@ func prepareNativeNAT64AggregateGuards(
 	publication *nativeSourcePublication,
 	transports []*nativeNAT64Transport,
 	utc time.Time,
+	origins ...*nativeNAT64GrantOrigin,
 ) (*preparedGuardBatch, error) {
 	if ctx == nil || len(transports) == 0 || transports[0] == nil || !generationHash(transports[0].baselineHash) {
 		return nil, errors.New("firewall: missing NAT64 guard model")
@@ -324,7 +381,7 @@ func prepareNativeNAT64AggregateGuards(
 	if err != nil {
 		return nil, err
 	}
-	return attachNativeNAT64Grants(ctx, prepared, publication, transports)
+	return attachNativeNAT64Grants(ctx, prepared, publication, transports, origins...)
 }
 
 func attachNativeNAT64Grants(
@@ -332,9 +389,10 @@ func attachNativeNAT64Grants(
 	prepared *preparedGuardBatch,
 	publication *nativeSourcePublication,
 	transports []*nativeNAT64Transport,
+	origins ...*nativeNAT64GrantOrigin,
 ) (*preparedGuardBatch, error) {
 	if ctx == nil || prepared == nil || !prepared.native || prepared.sourcePublication != publication ||
-		prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(transports) == 0 {
+		prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(prepared.nat64GrantOrigins) != 0 || len(prepared.nat64Callbacks) != 0 || len(transports) == 0 || publication == nil && len(origins) != 0 {
 		return nil, errors.New("firewall: invalid NAT64 grant attachment")
 	}
 	baselineHash := transports[0].baselineHash
@@ -346,13 +404,19 @@ func attachNativeNAT64Grants(
 	if publication != nil && prepared.sourceBaselineHash != baselineHash {
 		return nil, errors.New("firewall: NAT64 grant attachment changed source baseline")
 	}
-	data, err := expandNativeNAT64Grants(ctx, prepared.batch.data, publication, transports, prepared.sourceUTC, prepared.sourceAnchor)
+	models, err := nativeNAT64CallbackModels(transports)
+	if err != nil {
+		return nil, err
+	}
+	data, err := expandNativeNAT64Grants(ctx, prepared.batch.data, publication, transports, prepared.sourceUTC, prepared.sourceAnchor, origins...)
 	if err != nil {
 		return nil, err
 	}
 	next := *prepared
 	next.batch.data = data
 	next.nat64Transports = slices.Clone(transports)
+	next.nat64GrantOrigins = slices.Clone(origins)
+	next.nat64Callbacks = slices.Clone(models)
 	if len(transports) == 1 {
 		next.nat64Transport = transports[0]
 	}
@@ -372,24 +436,29 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 	if err != nil {
 		return err
 	}
-	inventory := []nativeSourceIP{}
+	inventories := map[bool][]nativeSourceIP{true: {}, false: {}}
 	indexes := map[nativeSourceIP]int{}
 	for index, address := range snapshot.Addresses {
-		if !address.Address.Is6() {
-			continue
-		}
 		identity := nativeSourceIP{nativeSourceIdentity: nativeSourceIdentity{iface: address.Interface, mac: address.MAC}, address: address.Address}
-		inventory = append(inventory, identity)
+		inventories[address.Address.Is6()] = append(inventories[address.Address.Is6()], identity)
 		indexes[identity] = index
 	}
-	slices.SortFunc(inventory, compareNativeIP)
+	for _, inventory := range inventories {
+		slices.SortFunc(inventory, compareNativeIP)
+	}
+	selected, err := nativeNAT64GrantMappings(ctx, transports, prepared.nat64GrantOrigins)
+	if err != nil {
+		return err
+	}
 	mapped := map[netip.Addr]bool{}
-	for _, transport := range transports {
-		for _, mapping := range transport.mappings {
-			mapped[mapping.Source] = true
+	for _, mappings := range selected {
+		for _, mapping := range mappings {
+			if mapping.Ready {
+				mapped[mapping.Source] = true
+			}
 		}
 	}
-	changes, err := decodeGuardChanges(prepared.batch.data)
+	changes, err := decodePreparedGuardChanges(prepared)
 	if err != nil {
 		return err
 	}
@@ -402,6 +471,8 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 		if !slices.Contains(nativeNAT64GrantRefs(), objectReference{Family: element.Family, Table: element.Table, Name: element.Name}) {
 			continue
 		}
+		target := strings.HasPrefix(element.Name, "native_n64_to")
+		inventory := inventories[!target]
 		for _, raw := range element.Values {
 			var lease struct {
 				Value struct {
@@ -423,7 +494,7 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 			}
 			id := (high >> 3) | (channel & ownershipRuleMask)
 			if high&^nativeSourceMask != 0 || channel&ownershipEpochMask != snapshot.Epoch<<policy.OwnershipRuleBits ||
-				id == 0 || int(id) > len(inventory) || !mapped[inventory[id-1].address] {
+				id == 0 || int(id) > len(inventory) || !target && !mapped[inventory[id-1].address] {
 				return errors.New("firewall: prepared NAT64 grant changed its source episode")
 			}
 			index := indexes[inventory[id-1]]

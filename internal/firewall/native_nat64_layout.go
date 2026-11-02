@@ -14,12 +14,33 @@ import (
 // It remains separate from installed profile admission until all raw/wire
 // authorization and physical paths are qualified together.
 func newNativeNAT64AccessLayout(ctx context.Context, baseline policy.Baseline, componentID string) (*guardLayout, error) {
+	return newNativeNAT64Layout(ctx, baseline, componentID, false)
+}
+
+// This prototype selects callback data/tuple objects before schema freezing.
+// It installs no callback forwarding hooks and is not a profile admission mode.
+func newNativeNAT64CallbackWriterLayout(ctx context.Context, baseline policy.Baseline, componentID string) (*guardLayout, error) {
+	return newNativeNAT64Layout(ctx, baseline, componentID, true)
+}
+
+func newNativeNAT64Layout(ctx context.Context, baseline policy.Baseline, componentID string, callbacks bool) (*guardLayout, error) {
 	if ctx == nil || len(baseline.NAT46) != 0 || len(baseline.NAT46Pools) != 0 {
 		return nil, errors.New("firewall: missing or combined NAT64 access geometry")
 	}
 	transport, err := newNativeNAT64Transport(ctx, baseline, componentID)
 	if err != nil {
 		return nil, err
+	}
+	if callbacks {
+		callback, err := newNativeNAT64CallbackTransport(ctx, transport)
+		if err != nil {
+			return nil, err
+		}
+		model, err := newNativeNAT64CallbackModel(ctx, baseline, callback)
+		if err != nil {
+			return nil, err
+		}
+		callback.grants = model
 	}
 	rules, err := newNativeRuleSet(baseline)
 	if err != nil {
@@ -89,15 +110,17 @@ func (access *nativeAccess) compileNAT64(ctx context.Context) error {
 		if err := mergeNativeChains(access.inet, transport.chains()); err != nil {
 			return err
 		}
-		projected, err := nativeNAT64ProjectedRules(ctx, access.ruleSet, transport)
-		if err != nil {
+		if err := access.compileNAT64CarrierContexts(ctx, transport); err != nil {
 			return err
 		}
-		if err := access.compileNAT64Requests(ctx, projected, transport); err != nil {
+		if err := access.compileNAT64Requests(ctx, transport); err != nil {
+			return err
+		}
+		if err := access.compileNAT64WirePolicy(ctx, transport); err != nil {
 			return err
 		}
 		access.inet["native_n64_zone"] = append(access.inet["native_n64_zone"], transport.zoneRules()...)
-		if err := access.compileNAT64RawOrder(ctx, projected, transport); err != nil {
+		if err := access.compileNAT64RawOrder(ctx, transport); err != nil {
 			return err
 		}
 	}
@@ -114,86 +137,68 @@ func (access *nativeAccess) compileNAT64(ctx context.Context) error {
 // The caller continues into allocation-gated enforcement after this returns.
 func (access *nativeAccess) compileNAT64Requests(
 	ctx context.Context,
-	projected *nativeRuleSet,
 	transport *nativeNAT64Transport,
 ) error {
-	if ctx == nil || access == nil || projected == nil || transport == nil {
+	if ctx == nil || access == nil || transport == nil {
 		return errors.New("firewall: missing NAT64 request dependencies")
 	}
+	paths, err := nativeNAT64EgressPolicies(ctx, access.ruleSet, transport)
+	if err != nil {
+		return err
+	}
 	chain := transport.name + "_request"
-	for index, rule := range projected.rules {
-		scopes, err := projected.scopes(ctx, index, false, false)
-		if err != nil {
-			return err
-		}
-		for _, scope := range scopes {
-			if rule.Action == "deny" {
-				access.add(chain, scope, nativeVerdict("return", ""))
-				continue
+	programs, err := nativeNAT64RawPrograms(ctx, paths)
+	if err != nil {
+		return err
+	}
+	for pathIndex, raw := range programs {
+		branch := chain + "_path_" + strconv.Itoa(pathIndex)
+		access.add(chain, nativeVerdict("jump", branch))
+		for index, rule := range raw.rules {
+			scopes, err := raw.scopes(ctx, index, false, false)
+			if err != nil {
+				return err
 			}
-			access.add(chain, scope,
-				nativeDynamicUpdate(transport.name+"_pending", "ip6 saddr", guardPayload("ip6", "saddr"), nil),
-				nativeVerdict("return", ""))
+			for _, scope := range scopes {
+				if rule.Action == "deny" {
+					access.add(branch, scope, nativeVerdict("return", ""))
+					continue
+				}
+				access.add(branch, scope,
+					nativeDynamicUpdate(transport.name+"_pending", "ip6 saddr", guardPayload("ip6", "saddr"), nil),
+					nativeVerdict("return", ""))
+			}
 		}
+		access.add(branch, nativeVerdict("return", ""))
 	}
 	access.add(chain, nativeVerdict("return", ""))
 	return ctx.Err()
 }
 
-func (access *nativeAccess) compileNAT64RawOrder(ctx context.Context, projected *nativeRuleSet, transport *nativeNAT64Transport) error {
+func (access *nativeAccess) compileNAT64RawOrder(ctx context.Context, transport *nativeNAT64Transport) error {
+	paths, err := nativeNAT64EgressPolicies(ctx, access.ruleSet, transport)
+	if err != nil {
+		return err
+	}
+	if err := access.compileNAT64Carrier(ctx, transport, paths); err != nil {
+		return err
+	}
 	for _, hook := range []string{"guard_forward", "permit_flow"} {
 		name := transport.name + "_ordered_" + hook
-		for index, rule := range projected.rules {
-			scopes, err := projected.scopes(ctx, index, false, false)
-			if err != nil {
-				return err
-			}
-			for _, scope := range scopes {
-				verdict := nativeVerdict("drop", "")
-				if rule.Action == "allow" {
-					verdict = nativeVerdict("goto", "native_"+strconv.Itoa(index)+"_"+hook+"_original")
-				}
-				access.add(name, scope, verdict)
-			}
+		geometry := nativeJoin(nativeInterface("oifname", transport.component),
+			nativeMatch("ip6 daddr "+transport.prefix.String(), guardPayload("ip6", "daddr"), controllerPrefix(transport.prefix)))
+		dispatch := []nativeScope{nativeJoin(geometry, nativeVerdict("goto", name))}
+		if hook == "guard_forward" {
+			// Demand belongs to the original IPv6 packet, after its source and
+			// mandatory floor checks but before an allocation exists. Recording
+			// it never skips the allocation, epoch or authorization guards.
+			dispatch = slices.Insert(dispatch, 0, nativeJoin(geometry, nativeVerdict("jump", transport.name+"_request")))
 		}
-		access.add(name, nativeVerdict("drop", ""))
-		dispatch := nativeJoin(nativeInterface("oifname", transport.component),
-			nativeMatch("ip6 daddr "+transport.prefix.String(), guardPayload("ip6", "daddr"), controllerPrefix(transport.prefix)),
-			nativeVerdict("goto", name))
 		position := slices.IndexFunc(access.inet[hook], func(rule nativeScope) bool { return rule.text == "jump native_denies" })
 		if position < 0 {
 			return errors.New("firewall: NAT64 ordered dispatch lost mandatory deny boundary")
 		}
-		access.inet[hook] = slices.Insert(access.inet[hook], position, dispatch)
-	}
-	// Rule order is part of the immutable profile. access.contexts is a map for
-	// indexed lookup, so ranging over it would make otherwise identical image
-	// builds emit different physical guard order.
-	for index := range access.ruleSet.rules {
-		contexts := access.contexts[index]
-		if projected.rules[index].Action != "allow" || len(projected.rules[index].From) == 0 {
-			continue
-		}
-		for _, packet := range contexts {
-			scopes, err := projected.physicalScopes(ctx, index, packet, false, false)
-			if err != nil {
-				return err
-			}
-			if len(scopes) == 0 {
-				continue
-			}
-			chain := transport.name + "_physical_" + strconv.FormatUint(packet.id, 10) + "_original"
-			if _, exists := access.netdev[chain]; !exists {
-				if err := access.compilePhysicalOrder(ctx, projected, chain, packet.iface, packet.mac, false); err != nil {
-					return err
-				}
-			}
-			kinds := nativePhysicalKinds(projected.rules[index].Authorization, false, []uint64{packet.id})
-			for _, scope := range scopes {
-				access.netdev["native_scope_gate"] = slices.Insert(access.netdev["native_scope_gate"], 0,
-					nativeJoin(kinds, scope, nativeVerdict("goto", chain)))
-			}
-		}
+		access.inet[hook] = slices.Insert(access.inet[hook], position, dispatch...)
 	}
 	// Correlation maps and their import chains live in the inet table, so the
 	// export must live there too. Priority 201 is after the mandatory egress

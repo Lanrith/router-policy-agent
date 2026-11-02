@@ -21,11 +21,15 @@ type nativeNAT64Transport struct {
 	baselineHash    string
 	component, name string
 	uplink          string
+	destinations    []string
+	sourceScopes    []netip.Prefix
 	prefix, pool    netip.Prefix
 	mappings        []policy.NAT64SourceMapping
 	sourceNetworks  map[string][]netip.Prefix
+	managedIPv4     []netip.Prefix
 	legs            []nativeNAT64Leg
 	ruleCount       int
+	callbacks       *nativeNAT64CallbackTransport
 }
 
 type nativeNAT64Leg struct {
@@ -81,8 +85,16 @@ func newNativeNAT64Transport(ctx context.Context, baseline policy.Baseline, comp
 		}
 		transport := &nativeNAT64Transport{geometry: geometry, baselineHash: compiler.BaselineHash(), component: component.ID,
 			name: fmt.Sprintf("native_n64_%d", index), uplink: b.NetworkModel.UplinkInterface, prefix: component.Prefix, pool: *component.SourcePool,
-			mappings: slices.Clone(component.SourceMappings), sourceNetworks: map[string][]netip.Prefix{}, ruleCount: len(b.NetworkModel.Rules)}
+			destinations: []string{b.NetworkModel.UplinkInterface}, mappings: slices.Clone(component.SourceMappings), sourceNetworks: map[string][]netip.Prefix{}, ruleCount: len(b.NetworkModel.Rules)}
 		for _, zone := range b.Zones {
+			transport.destinations = append(transport.destinations, zone.Interfaces...)
+			if slices.Contains(b.NetworkModel.ManagedNetworks, zone.Role) {
+				for _, network := range zone.Networks {
+					if network.Addr().Is4() {
+						transport.managedIPv4 = append(transport.managedIPv4, network)
+					}
+				}
+			}
 			for _, iface := range zone.Interfaces {
 				for _, network := range zone.Networks {
 					if network.Addr().Is6() {
@@ -90,6 +102,27 @@ func newNativeNAT64Transport(ctx context.Context, baseline policy.Baseline, comp
 					}
 				}
 			}
+		}
+		slices.Sort(transport.destinations)
+		transport.destinations = slices.Compact(transport.destinations)
+		for _, rule := range b.NetworkModel.Rules {
+			for _, source := range rule.From {
+				for _, prefix := range source.Addresses {
+					if prefix.Addr().Is6() {
+						transport.sourceScopes = append(transport.sourceScopes, prefix.Masked())
+					}
+				}
+			}
+		}
+		slices.SortFunc(transport.sourceScopes, func(first, second netip.Prefix) int {
+			if compared := first.Addr().Compare(second.Addr()); compared != 0 {
+				return compared
+			}
+			return first.Bits() - second.Bits()
+		})
+		transport.sourceScopes = slices.Compact(transport.sourceScopes)
+		if len(transport.sourceScopes) > 4096 {
+			return nil, errors.New("firewall: NAT64 source scope inventory exceeds capacity")
 		}
 		for _, protocol := range []string{"tcp", "udp", "icmp"} {
 			for _, reply := range []bool{false, true} {
@@ -154,17 +187,56 @@ func (transport *nativeNAT64Transport) definitions() []string {
 		fmt.Sprintf("map %s_aliases { type ipv4_addr : ipv6_addr; flags timeout; timeout 90s; size 65533; }", transport.name),
 		fmt.Sprintf("set %s_active_aliases { type ipv4_addr; flags timeout; timeout 90s; size 65533; }", transport.name),
 		fmt.Sprintf("set %s_sources { typeof ct zone . ip6 saddr; flags timeout; timeout 90s; size 65533; }", transport.name),
-		fmt.Sprintf("map %s_tokens { type mark . mark . classid : mark; size 65536; }", transport.name),
+		fmt.Sprintf("map %s_tokens { type mark . mark . classid : classid; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_token_epoch { type mark : mark; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_token_context { type mark : mark; size 65536; }", transport.name),
 		fmt.Sprintf("map %s_token_channel { type mark : classid; size 65536; }", transport.name),
+		fmt.Sprintf("map %s_token_origin { type mark : classid; size 65536; }", transport.name),
+		fmt.Sprintf("map %s_export_channel { type classid : classid; size 65536; }", transport.name),
+		fmt.Sprintf("map %s_target_tokens { type classid . mark . ifname . ipv4_addr : classid; size 65536; }", transport.name),
+		fmt.Sprintf("set %s_target_highs { type classid . mark; size 65536; }", transport.name),
 		fmt.Sprintf("set %s_token_epoch_pairs { type mark . mark; size 65536; }", transport.name),
+	}
+	for index := range transport.sourceScopes {
+		result = append(result, fmt.Sprintf("set %s { type ipv4_addr; flags timeout; timeout 90s; size 65533; }", transport.sourceScopeName(index)))
 	}
 	for _, leg := range transport.legs {
 		key, _ := leg.tuple(false)
-		result = append(result, fmt.Sprintf("map %s_proof { typeof %s : meta mark; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, key))
+		result = append(result, fmt.Sprintf("map %s_proof { typeof %s : meta priority; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, key))
+		if leg.reply {
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				result = append(result, fmt.Sprintf("map %s%s { typeof %s : meta priority; flags dynamic,timeout; timeout 2s; size 1024; }", leg.name, suffix, key))
+			}
+		}
+	}
+	if transport.callbacks != nil {
+		result = append(result, transport.callbacks.proof.definitions()...)
 	}
 	return result
+}
+
+// Opaque token IDs are deterministic within a registry and can be reassigned
+// after replacement. Withdraw all tuple correlations in the same transaction
+// before new token or allocation rows become visible. Their two-second timeout
+// alone cannot prevent an old packet from acquiring a new authority epoch.
+func (transport *nativeNAT64Transport) tupleProofClears() []any {
+	operations := make([]any, 0, len(transport.legs))
+	for _, leg := range transport.legs {
+		operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{
+			Family: "inet", Table: ownedTable, Name: leg.name + "_proof",
+		}}})
+		if leg.reply {
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				operations = append(operations, map[string]any{"flush": map[string]any{"map": objectReference{
+					Family: "inet", Table: ownedTable, Name: leg.name + suffix,
+				}}})
+			}
+		}
+	}
+	if transport.callbacks != nil {
+		operations = append(operations, transport.callbacks.clears()...)
+	}
+	return operations
 }
 
 func (transport *nativeNAT64Transport) token() (string, any) {
@@ -269,12 +341,17 @@ func (leg nativeNAT64Leg) allocation(transport *nativeNAT64Transport, imported b
 	return nativeMatch(text, guardPayload("ip", addressField), "@"+transport.name+"_active_aliases")
 }
 
-// Transport import replaces only packet metadata, and initializes a new IPv4
-// connection's epoch from the fresh exact export. Confirmed epochs are retained.
+// Transport import restores source provenance and packet metadata. The actual
+// final-interface policy alone binds a new IPv4 authorization marker; imports
+// never rewrite confirmed connection markers.
 // Current ownership, allocation publication, ordered policy and grants must be
 // checked by the caller independently before and after this correlation.
 func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
-	chains := map[string][]nativeScope{}
+	chains := transport.originChains()
+	for name, rules := range transport.originIdentityChains() {
+		chains[name] = rules
+	}
+	chains[transport.name+"_export_priority"] = transport.exportPriorityChain()
 	for _, leg := range transport.legs {
 		for _, imported := range []bool{false, true} {
 			direction := "export"
@@ -290,14 +367,34 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 				tokenStage, channelStage, epochStage, contextStage := checked+"_token", checked+"_channel", checked+"_epoch", checked+"_context"
 				chains[checked] = append(chains[checked],
 					nativeJoin(nativeMangle("meta mark set "+keyText+" map @"+leg.name+"_proof", guardMeta("mark"), proof), nativeVerdict("goto", tokenStage)), nativeVerdict("drop", ""))
-				chains[tokenStage] = []nativeScope{nativeJoin(
+				origin := transport.name + "_origin"
+				originStage := checked + "_origin"
+				continuation := originStage
+				if leg.reply {
+					chains[tokenStage] = []nativeScope{
+						nativeJoin(nativeMangle("meta priority set "+keyText+" map @"+leg.name+"_origin_proof", guardMeta("priority"), map[string]any{"map": map[string]any{"key": key, "data": "@" + leg.name + "_origin_proof"}}), nativeVerdict("goto", originStage)),
+						nativeVerdict("drop", ""),
+					}
+					continuation = checked + "_identity"
+					chains[originStage] = []nativeScope{
+						nativeVerdict("jump", origin+"_connection"),
+						nativeJoin(nativeMangle("meta priority set "+keyText+" map @"+leg.name+"_identity_proof", guardMeta("priority"), map[string]any{"map": map[string]any{"key": key, "data": "@" + leg.name + "_identity_proof"}}), nativeVerdict("goto", continuation)),
+						nativeVerdict("drop", ""),
+					}
+					chains[continuation] = []nativeScope{nativeVerdict("jump", origin+"_identity_connection")}
+				} else {
+					chains[tokenStage] = []nativeScope{
+						nativeJoin(nativeMangle("meta priority set meta mark map @"+transport.name+"_token_origin", guardMeta("priority"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_origin"}}), nativeVerdict("goto", originStage)),
+						nativeVerdict("drop", ""),
+					}
+					chains[originStage] = []nativeScope{nativeVerdict("jump", origin+"_capture")}
+				}
+				chains[continuation] = append(chains[continuation], nativeJoin(
 					nativeMangle("meta priority set meta mark map @"+transport.name+"_token_channel", guardMeta("priority"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_channel"}}),
-					nativeVerdict("goto", channelStage)), nativeVerdict("drop", "")}
-				expectedEpoch := map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_epoch"}}
-				chains[channelStage] = []nativeScope{
-					nativeJoin(nativeMatch("ct mark 0", nativeCT("mark"), 0), nativeState("new"),
-						nativeMangle("ct mark set meta mark map @"+transport.name+"_token_epoch", nativeCT("mark"), expectedEpoch)),
-					nativeVerdict("goto", epochStage),
+					nativeVerdict("goto", channelStage)), nativeVerdict("drop", ""))
+				chains[channelStage] = []nativeScope{nativeVerdict("goto", contextStage)}
+				if leg.reply {
+					chains[channelStage] = []nativeScope{nativeVerdict("goto", epochStage)}
 				}
 				epochPair := map[string]any{"concat": []any{nativeCT("mark"), guardMeta("mark")}}
 				chains[epochStage] = []nativeScope{
@@ -306,17 +403,21 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 				}
 				chains[contextStage] = []nativeScope{nativeJoin(
 					nativeMangle("meta mark set meta mark map @"+transport.name+"_token_context", guardMeta("mark"), map[string]any{"map": map[string]any{"key": guardMeta("mark"), "data": "@" + transport.name + "_token_context"}}),
-					nativeVerdict("return", "")), nativeVerdict("drop", "")}
+					nativeVerdict("goto", contextStage+"_restored")), nativeVerdict("drop", "")}
+				if !leg.reply {
+					chains[contextStage+"_restored"] = []nativeScope{nativeVerdict("jump", origin+"_identity_capture")}
+				}
+				chains[contextStage+"_restored"] = append(chains[contextStage+"_restored"], nativeVerdict("return", ""))
 				continue
 			}
-			tokenText, token := transport.token()
-			record := checked + "_record"
-			chains[checked] = []nativeScope{nativeJoin(nativeMangle("ct mark set "+tokenText, nativeCT("mark"), token), nativeVerdict("goto", record)), nativeVerdict("drop", "")}
-			chains[record] = []nativeScope{nativeJoin(
-				nativeDynamicDelete(leg.name+"_proof", keyText+" : ct mark", key, nativeCT("mark")),
-				nativeDynamicUpdate(leg.name+"_proof", keyText+" : ct mark", key, nativeCT("mark")),
-				nativeMangle("ct mark set ct mark map @"+transport.name+"_token_epoch", nativeCT("mark"), map[string]any{"map": map[string]any{"key": nativeCT("mark"), "data": "@" + transport.name + "_token_epoch"}}),
-				nativeVerdict("return", "")), nativeVerdict("drop", "")}
+			for name, rules := range transport.exportChains(leg, checked, keyText, key) {
+				chains[name] = rules
+			}
+		}
+	}
+	if transport.callbacks != nil {
+		for name, rules := range transport.callbacks.chains() {
+			chains[name] = rules
 		}
 	}
 	return chains
@@ -339,28 +440,56 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 	sources := guardSetHeader("inet", transport.name+"_sources", map[string]any{"typeof": map[string]any{"concat": []any{nativeCT("zone"), guardPayload("ip6", "saddr")}}}, 65533)
 	sources["flags"], sources["timeout"] = []string{"timeout"}, 90
 	schema.sets[transport.name+"_sources"] = sources
+	for index := range transport.sourceScopes {
+		name := transport.sourceScopeName(index)
+		header := guardSetHeader("inet", name, "ipv4_addr", 65533)
+		header["flags"], header["timeout"] = []string{"timeout"}, 90
+		schema.sets[name] = header
+	}
 	for _, item := range []struct {
 		name     string
 		datatype any
 		mapType  string
-	}{{"_tokens", []string{"mark", "mark", "classid"}, "mark"}, {"_token_epoch", "mark", "mark"}, {"_token_context", "mark", "mark"}, {"_token_channel", "mark", "classid"}} {
+	}{{"_tokens", []string{"mark", "mark", "classid"}, "classid"}, {"_token_epoch", "mark", "mark"}, {"_token_context", "mark", "mark"}, {"_token_channel", "mark", "classid"}, {"_token_origin", "mark", "classid"}, {"_export_channel", "classid", "classid"}, {"_target_tokens", []string{"classid", "mark", "ifname", "ipv4_addr"}, "classid"}} {
 		name := transport.name + item.name
 		header := guardSetHeader("inet", name, item.datatype, 65536)
 		header["map"] = item.mapType
 		schema.maps[name] = header
 	}
+	schema.sets[transport.name+"_target_highs"] = guardSetHeader("inet", transport.name+"_target_highs", []string{"classid", "mark"}, 65536)
 	epochPairs := guardSetHeader("inet", transport.name+"_token_epoch_pairs", []string{"mark", "mark"}, 65536)
 	schema.sets[transport.name+"_token_epoch_pairs"] = epochPairs
 	for _, leg := range transport.legs {
 		_, key := leg.tuple(false)
 		name := leg.name + "_proof"
 		header := guardSetHeader("inet", name, map[string]any{"typeof": key}, 1024)
-		header["map"], header["flags"], header["timeout"] = "mark", []string{"timeout", "dynamic"}, 2
+		header["map"], header["flags"], header["timeout"] = "classid", []string{"timeout", "dynamic"}, 2
 		schema.maps[name] = header
+		if leg.reply {
+			for _, suffix := range []string{"_origin_proof", "_identity_proof"} {
+				name := leg.name + suffix
+				header := guardSetHeader("inet", name, map[string]any{"typeof": key}, 1024)
+				header["map"], header["flags"], header["timeout"] = "classid", []string{"timeout", "dynamic"}, 2
+				schema.maps[name] = header
+			}
+		}
+	}
+	if transport.callbacks != nil {
+		callback := transport.callbacks.proof.schema()
+		for name, header := range callback.maps {
+			schema.maps[name] = header
+		}
+		for name, header := range callback.sets {
+			schema.sets[name] = header
+		}
 	}
 	for name, rules := range transport.chains() {
 		schema.chains[name] = map[string]any{"family": "inet", "table": ownedTable, "name": name}
 		schema.rules[name] = nativeRulesExpressions(rules)
 	}
 	return schema
+}
+
+func (transport *nativeNAT64Transport) sourceScopeName(index int) string {
+	return fmt.Sprintf("%s_source_scope_%d", transport.name, index)
 }

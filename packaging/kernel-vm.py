@@ -23,6 +23,7 @@ EXPECTED_TESTS = [
     'TestKernelGuardClassificationRestoreAndSeal', 'TestKernelZeroGrantHistoryClosesReusedNativeAddresses',
     'TestKernelControllerTAYGARoundTrip', 'TestKernelControllerTAYGAICMP', 'TestKernelDeviceTAYGACallbacks',
     'TestKernelNamedOwnershipRefreshAndExpiry',
+    'TestKernelNamedLocalNeighborControl',
     'TestKernelNamedOwnershipUsesWriterAndFloorFences',
     'TestKernelNamedOwnershipEpochRejectsOldConnections',
     'TestKernelNamedNativePredicatesRetainEveryField',
@@ -48,15 +49,42 @@ EXPECTED_TESTS = [
     'TestKernelNamedNAT46JoinedTAYGAConfiguration',
     'TestKernelNamedNAT64AllocationIdentity',
     'TestKernelNamedNAT64ProjectedOrderAndRevocation',
+    'TestKernelNamedNAT64PendingRequiresOriginalPolicyAndSource',
+    'TestKernelNamedNAT64PendingPreservesLogicalDestinationOrder',
+    'TestKernelNamedNAT64WireFinalPolicyAndAllocationScopes',
+    'TestKernelNamedNAT64WireSourceEpochAndAllocationScopes',
+    'TestKernelNamedNAT64WireLANOnlyPolicy',
+    'TestKernelNamedNAT64WireTargetOwnership',
+    'TestKernelNamedNAT64OriginCaptureAndConnectionBinding',
+    'TestKernelNamedNAT64OriginReturnRequiresBothProofs',
+    'TestKernelNamedNAT64OriginIdentityCaptureAndBinding',
     'TestKernelNamedNAT64JoinedTAYGAConfiguration',
     'TestKernelNamedNAT64JoinedTAYGAOwner',
     'TestKernelNamedNAT64JoinedTAYGADirectory',
+    'TestKernelNamedNAT64JoinedFinalInterfaceDenial',
+    'TestKernelNamedNAT64JoinedDistinctFinalRules',
+    'TestKernelNamedNAT64JoinedOwnerDirectoryPaths',
+    'TestKernelNamedNAT64JoinedTargetOwner',
+    'TestKernelNamedNAT64JoinedTargetDirectory',
+    'TestKernelNamedNAT64JoinedRecipientGrant',
+    'TestKernelNamedNAT64JoinedRecipientGrantWithCallerHistory',
+    'TestKernelNamedNAT64JoinedOwnedCallerAndTarget',
+    'TestKernelNamedNAT64JoinedSourceGrantToOwnedTarget',
+    'TestKernelNamedNAT64JoinedOwnedTargetExpiry',
+    'TestKernelNamedNAT64JoinedDynamicSourceGrant',
+    'TestKernelNamedNAT64JoinedDynamicTargetGrant',
+    'TestKernelNamedNAT64JoinedDynamicRecipientGrant',
+    'TestKernelNamedNAT64JoinedDynamicRecipientWithCallerHistory',
+    'TestKernelNamedNAT64JoinedDynamicSourceGrantToOwnedTarget',
+    'TestKernelNamedNAT64DynamicGrantPublicationFences',
+    'TestKernelNamedNAT64CallbackTupleTransport',
+    'TestKernelNamedNAT64CallbackOrderedWirePolicy',
     'TestKernelNamedCombinedTranslationLayout',
 ]
 
 
 INIT = b'''#!/usr/bin/python3
-import ctypes,os,pathlib,subprocess,traceback
+import ctypes,json,os,pathlib,subprocess,traceback
 os.environ['PATH']='/usr/sbin:/usr/bin:/sbin:/bin'
 try:
  for name in ('proc','sys','dev','run','tmp'):
@@ -78,6 +106,12 @@ try:
  os.environ['ROUTER_POLICY_KERNEL_TEST']='isolated'
  os.environ['ROUTER_POLICY_REQUIRE_HEADER_TEST']='1'
  subprocess.run(['/kernel-tests','-test.v','-test.run=@TEST_PATTERN@'],check=True)
+ ruleset=json.loads(subprocess.run(['nft','--json','list','ruleset'],check=True,capture_output=True).stdout)
+ assert isinstance(ruleset,dict) and set(ruleset)=={'nftables'} and isinstance(ruleset['nftables'],list)
+ assert all(isinstance(item,dict) and set(item)=={'metainfo'} for item in ruleset['nftables']), 'Fixture rules survived cleanup.'
+ links=json.loads(subprocess.run(['ip','--json','link','show'],check=True,capture_output=True).stdout)
+ assert isinstance(links,list) and [item['ifname'] for item in links]==['lo'], 'Fixture interfaces survived cleanup.'
+ print('ROUTER_POLICY_KERNEL_VM_CLEAN',flush=True)
  print('ROUTER_POLICY_KERNEL_VM_PASS',flush=True)
 except BaseException:
  traceback.print_exc()
@@ -172,7 +206,7 @@ def run_vm(directory, tests):
 
 
 def check_console(console, tests, status):
-    assert status == 0 and 'ROUTER_POLICY_KERNEL_VM_PASS' in console and \
+    assert status == 0 and 'ROUTER_POLICY_KERNEL_VM_CLEAN' in console and 'ROUTER_POLICY_KERNEL_VM_PASS' in console and \
         'ROUTER_POLICY_KERNEL_VM_FAIL' not in console and '--- SKIP:' not in console and \
         '--- FAIL:' not in console, console[-12000:]
     for name in tests:
@@ -180,13 +214,11 @@ def check_console(console, tests, status):
 
 
 def vm_batches(tests):
-    # Keep the original thirteen-fixture group intact. Run the native core
-    # separately, and keep uplink-NAT inspection with the translator fixtures
-    # so their table cleanup remains covered. All VMs use the same timeout,
-    # writer fences, binary and source inventory.
-    # The aggregate can pass only after every selected fixture passes once.
+    # Keep every fixture in its original order. Three 90-second fixtures
+    # leave room for boot and cleanup inside the unchanged 360-second cap.
+    # Each batch independently verifies an empty ruleset before succeeding.
     if tests == EXPECTED_TESTS:
-        return [tests[:13], tests[13:18], tests[18:28], tests[28:]]
+        return [tests[index:index+3] for index in range(0, len(tests), 3)]
     return [tests]
 
 
@@ -247,7 +279,7 @@ def main():
                      'private_image_qualified': False, 'signed_image_qualified': False,
                      'persistent_state_migration_qualified': False,
                      'tests': tests, 'full_guard_suite': tests == EXPECTED_TESTS,
-                     'checks': [name+' passes' for name in tests]+['no skipped packet-header tests']}
+                     'checks': [name+' passes' for name in tests]+['no skipped packet-header tests', 'empty ruleset and interfaces after every VM batch']}
     (args.work/'qualification.json').write_text(json.dumps(qualification, indent=2, sort_keys=True)+'\n')
     print('Offline policy guard VM passed; private image qualification remains separate.')
 

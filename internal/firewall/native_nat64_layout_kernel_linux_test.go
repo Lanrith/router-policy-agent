@@ -50,10 +50,12 @@ func TestKernelNamedNAT64ProjectedOrderAndRevocation(t *testing.T) {
 		ID: "nat64-internal", Prefix: netip.MustParsePrefix("fdca:1a2b:e064::/96"), Scope: "private", SourcePool: &pool,
 		SourceMappings: []policy.NAT64SourceMapping{{Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10"), Ready: true}},
 	}}
+	// This unscoped deny terminates every potential path. WAN-only denies
+	// are enforced after routing and are tested with actual TAYGA separately.
 	b.NetworkModel.Rules = []policy.NetworkRule{
 		{Action: "deny", Authorization: "inherit", Protocol: "any",
 			From: []policy.NetworkSelector{{Interface: "lan10"}},
-			To:   []policy.NetworkSelector{{Interface: "wan", Addresses: []netip.Prefix{netip.MustParsePrefix("10.240.3.11/32")}}}},
+			To:   []policy.NetworkSelector{{Addresses: []netip.Prefix{netip.MustParsePrefix("10.240.3.11/32")}}}},
 		{Action: "allow", Authorization: "owner", Protocol: "udp", Ports: []uint16{6061},
 			From: []policy.NetworkSelector{{Interface: "lan10", Addresses: []netip.Prefix{netip.MustParsePrefix("fdca:1a2b::/64")}}},
 			To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}}},
