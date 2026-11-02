@@ -309,6 +309,12 @@ allocation withdrawal and recovery. The VM runner retains the complete fixture
 order and splits it into groups of at most three. It independently checks an
 empty ruleset and no extra interfaces after each batch. Its 360-second VM cap and individual fixture
 time limits are unchanged.
+The native `make kernel` qualification separates parallel unit/property tests
+from serial core, NAT46 and NAT64 packet groups. Every tagged test belongs to
+exactly one group. Each invocation retains race detection, shuffled order,
+uncached execution and Go's original default deadline; the container capabilities,
+required header checks and overall CI job limit are unchanged. The separately
+seeded conntrack regression still runs in its own network namespace.
 These tuple fixtures use synthetic caller grants and conversion frames; they do
 not qualify actual callback TAYGA conversion or live authorities.
 

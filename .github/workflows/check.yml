@@ -99,6 +99,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Verify complete kernel group coverage
+        run: python3 -m unittest discover -s packaging -p test_kernel_groups.py
       - name: Qualify actual kernel expiry and atomic owned updates
         run: ROUTER_POLICY_REQUIRE_HEADER_TEST=1 make kernel
       - name: Qualify non-root IPC through the actual guarded native backend
