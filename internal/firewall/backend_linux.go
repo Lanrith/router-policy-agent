@@ -99,11 +99,9 @@ func (b *guardedBackend) apply(
 	if err != nil {
 		return err
 	}
-	if sources := b.options.profile.layout.nat46Sources(); sources != nil {
-		owned, err = sources.model.translatedClassification(ctx, owned)
-		if err != nil {
-			return err
-		}
+	owned, err = b.options.profile.layout.translatedClassification(ctx, owned)
+	if err != nil {
+		return err
 	}
 	history = owned
 	prepared, publication, err := b.prepareApplication(ctx, authorization, history)
@@ -211,6 +209,10 @@ func (b *guardedBackend) prepareApplication(
 	history state.Classification,
 ) (*preparedGuardBatch, *nativeSourcePublication, error) {
 	options := b.options
+	history, err := options.profile.layout.translatedClassification(ctx, history)
+	if err != nil {
+		return nil, nil, err
+	}
 	var observation *rulesetObservation
 	var publication *nativeSourcePublication
 	var grantOrigins []*nativeNAT64GrantOrigin
@@ -350,11 +352,9 @@ func (p *process) sealGuarded(
 		slices.Sort(*values)
 		*values = slices.Compact(*values)
 	}
-	if sources := layout.nat46Sources(); sources != nil {
-		history, err = sources.model.translatedClassification(ctx, history)
-		if err != nil {
-			return sealingObservation{}, err
-		}
+	history, err = layout.translatedClassification(ctx, history)
+	if err != nil {
+		return sealingObservation{}, err
 	}
 	prepared, err := prepareMappedGuardSeal(ctx, history, layout.translationPaths)
 	if err == nil && layout.native != nil {
@@ -494,6 +494,11 @@ func inspectSealingGuards(
 	if layout.nat46Sources() != nil {
 		additional = append(additional, nativeNAT46TargetGrantRefs()...)
 	}
+	callbacks, err := layout.nat64CallbackModels()
+	if err != nil {
+		return nil, empty, err
+	}
+	additional = append(additional, nativeNAT64CallbackGrantRefs(callbacks)...)
 	for _, ref := range additional {
 		observation := inet
 		if ref.Family == "netdev" {
@@ -509,6 +514,7 @@ func inspectSealingGuards(
 		cohort: macs, addresses4: addresses4, addresses6: addresses6,
 		managedInterfaces: slices.Clone(layout.managedInterfaces), leases: leaseElements,
 		translationPaths: slices.Clone(layout.translationPaths),
+		nat64Callbacks:   slices.Clone(callbacks),
 	}
 	if sources := layout.nat46Sources(); sources != nil {
 		inventory.nat46Model = sources.model

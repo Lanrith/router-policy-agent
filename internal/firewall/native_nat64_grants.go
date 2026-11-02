@@ -229,6 +229,30 @@ func expandNativeNAT64Grants(
 	if err != nil {
 		return nil, err
 	}
+	callbacks, err := nativeNAT64CallbackModels(transports)
+	if err != nil {
+		return nil, err
+	}
+	callbackCommands := []change{}
+	for index, model := range callbacks {
+		if model == nil {
+			continue
+		}
+		projected, err := model.targetGrantClears()
+		if err != nil {
+			return nil, err
+		}
+		if publication != nil {
+			if len(origins) != len(transports) {
+				return nil, errors.New("firewall: callback grants require their original runtime activation")
+			}
+			projected, err = model.projectTargetGrants(ctx, changes, publication, utc, anchor, origins[index])
+			if err != nil {
+				return nil, err
+			}
+		}
+		callbackCommands = append(callbackCommands, projected...)
+	}
 	baselineHash := transports[0].baselineHash
 	for index, transport := range transports {
 		if transport == nil || !generationHash(transport.baselineHash) || transport.baselineHash != baselineHash {
@@ -283,6 +307,7 @@ func expandNativeNAT64Grants(
 		}
 	}
 	changes.Commands = append(changes.Commands, extra...)
+	changes.Commands = append(changes.Commands, callbackCommands...)
 	encoded, err := json.Marshal(changes)
 	if err != nil || len(encoded) > maximumBatch {
 		return nil, errors.New("firewall: NAT64 grant transaction exceeds capacity")
@@ -311,13 +336,20 @@ func preparedNativeNAT64Transports(prepared *preparedGuardBatch) ([]*nativeNAT64
 	transports := slices.Clone(prepared.nat64Transports)
 	switch {
 	case len(transports) == 0 && prepared.nat64Transport == nil:
+		if len(prepared.nat64Callbacks) != 0 {
+			return nil, errors.New("firewall: callback grants lost their selected transport")
+		}
 		return nil, nil
 	case len(transports) == 0:
-		return []*nativeNAT64Transport{prepared.nat64Transport}, nil
+		transports = []*nativeNAT64Transport{prepared.nat64Transport}
 	case len(transports) == 1 && prepared.nat64Transport != transports[0]:
 		return nil, errors.New("firewall: singular NAT64 grant selector changed")
 	case len(transports) > 1 && prepared.nat64Transport != nil:
 		return nil, errors.New("firewall: aggregate NAT64 grants acquired a singular selector")
+	}
+	models, err := nativeNAT64CallbackModels(transports)
+	if err != nil || !slices.Equal(models, prepared.nat64Callbacks) {
+		return nil, errors.New("firewall: callback grant model changed its original selection")
 	}
 	return transports, nil
 }
@@ -360,7 +392,7 @@ func attachNativeNAT64Grants(
 	origins ...*nativeNAT64GrantOrigin,
 ) (*preparedGuardBatch, error) {
 	if ctx == nil || prepared == nil || !prepared.native || prepared.sourcePublication != publication ||
-		prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(prepared.nat64GrantOrigins) != 0 || len(transports) == 0 || publication == nil && len(origins) != 0 {
+		prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(prepared.nat64GrantOrigins) != 0 || len(prepared.nat64Callbacks) != 0 || len(transports) == 0 || publication == nil && len(origins) != 0 {
 		return nil, errors.New("firewall: invalid NAT64 grant attachment")
 	}
 	baselineHash := transports[0].baselineHash
@@ -372,6 +404,10 @@ func attachNativeNAT64Grants(
 	if publication != nil && prepared.sourceBaselineHash != baselineHash {
 		return nil, errors.New("firewall: NAT64 grant attachment changed source baseline")
 	}
+	models, err := nativeNAT64CallbackModels(transports)
+	if err != nil {
+		return nil, err
+	}
 	data, err := expandNativeNAT64Grants(ctx, prepared.batch.data, publication, transports, prepared.sourceUTC, prepared.sourceAnchor, origins...)
 	if err != nil {
 		return nil, err
@@ -380,6 +416,7 @@ func attachNativeNAT64Grants(
 	next.batch.data = data
 	next.nat64Transports = slices.Clone(transports)
 	next.nat64GrantOrigins = slices.Clone(origins)
+	next.nat64Callbacks = slices.Clone(models)
 	if len(transports) == 1 {
 		next.nat64Transport = transports[0]
 	}
@@ -421,7 +458,7 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 			}
 		}
 	}
-	changes, err := decodeGuardChanges(prepared.batch.data)
+	changes, err := decodePreparedGuardChanges(prepared)
 	if err != nil {
 		return err
 	}

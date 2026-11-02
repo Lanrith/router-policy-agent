@@ -24,6 +24,7 @@ type guardInventory struct {
 	managedInterfaces []string
 	translationPaths  []deviceTranslationPath
 	nat46Model        *nativeNAT46Model
+	nat64Callbacks    []*nativeNAT64CallbackModel
 	leases            int
 }
 
@@ -94,6 +95,10 @@ func (layout *guardLayout) inspectObservations(ctx context.Context, inet, netdev
 	}
 	if sources := layout.nat46Sources(); sources != nil {
 		inventory.nat46Model = sources.model
+	}
+	inventory.nat64Callbacks, err = layout.nat64CallbackModels()
+	if err != nil {
+		return nil, err
 	}
 	if err := layout.inspectOwnership(ctx, inet, netdev); err != nil {
 		return nil, err

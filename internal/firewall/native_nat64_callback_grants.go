@@ -9,7 +9,7 @@ import (
 )
 
 // This construction-only projection installs no rules or forwarding permission.
-// Its future typed writer must retain and independently revalidate the original
+// Its typed writer retains and independently revalidates the original
 // logical authorization, source receipt, allocation ledger and live readiness.
 // Generic guarded mutation does not admit the callback component's collections.
 func (model *nativeNAT64CallbackModel) projectTargetGrants(ctx context.Context, logical guardChanges, publication *nativeSourcePublication, utc, anchor time.Time, origin *nativeNAT64GrantOrigin) ([]change, error) {
@@ -39,10 +39,20 @@ func (model *nativeNAT64CallbackModel) projectTargetGrants(ctx context.Context, 
 			selected.mappings = append(selected.mappings, mapping)
 		}
 	}
+	filtered, err := model.filterLogicalGrants(ctx, logical)
+	if err != nil {
+		return nil, err
+	}
+	return selected.projectTargetGrants(ctx, filtered, publication, utc, anchor)
+}
+
+// Filter both publication and independent observation through the same immutable
+// caller class. Logical grants alone never authorize a chained translation.
+func (model *nativeNAT64CallbackModel) filterLogicalGrants(ctx context.Context, logical guardChanges) (guardChanges, error) {
 	filtered := guardChanges{Commands: []change{}}
 	for _, command := range logical.Commands {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return guardChanges{}, err
 		}
 		if command.Add == nil {
 			continue
@@ -54,11 +64,11 @@ func (model *nativeNAT64CallbackModel) projectTargetGrants(ctx context.Context, 
 		values := []json.RawMessage{}
 		for _, raw := range element.Values {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return guardChanges{}, err
 			}
 			tuple, err := validateLeasedTuple(raw, true)
 			if err != nil {
-				return nil, err
+				return guardChanges{}, err
 			}
 			if model.eligibleCaller(tuple.peer) {
 				values = append(values, raw)
@@ -68,7 +78,7 @@ func (model *nativeNAT64CallbackModel) projectTargetGrants(ctx context.Context, 
 			filtered.Commands = append(filtered.Commands, guardAdd("inet", element.Name, values))
 		}
 	}
-	return selected.projectTargetGrants(ctx, filtered, publication, utc, anchor)
+	return filtered, ctx.Err()
 }
 
 func (model *nativeNAT64CallbackModel) eligibleCaller(address netip.Addr) bool {

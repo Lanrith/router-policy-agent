@@ -14,6 +14,7 @@ import (
 type nativeNAT64CallbackTransport struct {
 	native *nativeNAT64Transport
 	proof  *nativeNAT46Transport
+	grants *nativeNAT64CallbackModel
 }
 
 func newNativeNAT64CallbackTransport(ctx context.Context, transport *nativeNAT64Transport) (*nativeNAT64CallbackTransport, error) {

@@ -109,6 +109,16 @@ func (inventory *guardInventory) checkMirrors(
 		}
 		inventory.leases += count
 	}
+	for _, model := range inventory.nat64Callbacks {
+		if model == nil {
+			continue
+		}
+		count, err := model.inspectTargetGrants(ctx, logical, inet, netdev)
+		if err != nil {
+			return err
+		}
+		inventory.leases += count
+	}
 	return inventory.checkAddressAdditions(ctx, wanted, false)
 }
 
@@ -208,7 +218,7 @@ func (inventory *guardInventory) checkPreparedReplacement(ctx context.Context, p
 	if inventory == nil || inventory.native != prepared.native || !slices.Equal(inventory.translationPaths, prepared.translationPaths) {
 		return errors.New("firewall: translated preparation differs from inspected root geometry")
 	}
-	if inventory.nat46Model != prepared.nat46Model {
+	if inventory.nat46Model != prepared.nat46Model || !slices.Equal(inventory.nat64Callbacks, prepared.nat64Callbacks) {
 		return errors.New("firewall: nat46 preparation differs from inspected original geometry")
 	}
 	if err := validatePreparedGuardBatch(ctx, prepared); err != nil {
@@ -217,7 +227,7 @@ func (inventory *guardInventory) checkPreparedReplacement(ctx context.Context, p
 	data := prepared.batch.data
 	if prepared.native {
 		var err error
-		data, err = stripNativeGuards(data)
+		data, err = stripNativeGuardsWithCallbacks(data, prepared.nat64Callbacks)
 		if err != nil {
 			return err
 		}

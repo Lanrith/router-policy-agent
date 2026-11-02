@@ -34,7 +34,7 @@ func (model *nativeNAT46Model) inspectTargetGrants(ctx context.Context, logical 
 	}
 	count := 0
 	mirrors := map[string][]json.RawMessage{}
-	for _, ref := range nativeNAT46TargetGrantRefs() {
+	for _, ref := range nativeMappedTargetGrantRefs(model.policyNamespace()) {
 		observation := inet
 		if ref.Family == "netdev" {
 			observation = netdev
@@ -138,7 +138,7 @@ func nativeNAT46ObservedTargets(ctx context.Context, inet *guardTableObservation
 
 func (model *nativeNAT46Model) expectedTargetGrantObservation(ctx context.Context, logical guardChanges, owned map[nativeSourceIP]int, base uint32, epochTimeout int) (map[string]map[string]int, error) {
 	expected := map[string]map[string]int{}
-	for _, ref := range nativeNAT46TargetGrantRefs() {
+	for _, ref := range nativeMappedTargetGrantRefs(model.policyNamespace()) {
 		expected[ref.Name] = map[string]int{}
 	}
 	if base == 0 {
@@ -193,7 +193,7 @@ func (model *nativeNAT46Model) expectedTargetGrantObservation(ctx context.Contex
 				if err != nil {
 					return nil, err
 				}
-				name := fmt.Sprintf("native_n46_to%d_%s", version, protocol)
+				name := fmt.Sprintf("%s_to%d_%s", model.policyNamespace(), version, protocol)
 				timeout := min(lease.Element.Timeout, owned[target], epochTimeout)
 				expected[name][string(key)] = max(expected[name][string(key)], timeout)
 				if len(expected[name]) > maximumTupleCount {

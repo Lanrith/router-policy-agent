@@ -39,6 +39,7 @@ type preparedOwnership struct {
 	nat46ObservedEpoch uint32
 	nat64Transport     *nativeNAT64Transport
 	nat64Transports    []*nativeNAT64Transport
+	nat64Callbacks     []*nativeNAT64CallbackModel
 }
 
 func prepareOwnershipClear(ctx context.Context) (*preparedOwnership, error) {

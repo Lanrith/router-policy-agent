@@ -30,6 +30,7 @@ const (
 // alone must not be activated as a complete router policy.
 type guardLayout struct {
 	inspectionSchemas map[string]*guardTableSchema
+	callbackModels    []*nativeNAT64CallbackModel
 	native            *nativeAccess
 	ownership         bool
 	interfaces        []string

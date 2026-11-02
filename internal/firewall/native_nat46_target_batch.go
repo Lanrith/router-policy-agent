@@ -62,10 +62,14 @@ func (model *nativeNAT46Model) expandTargetGuards(ctx context.Context, data []by
 }
 
 func validateNAT46TargetGrantDeadlines(ctx context.Context, prepared *preparedGuardBatch) error {
-	if prepared.nat46Model == nil || prepared.sourcePublication == nil {
+	return validateMappedTargetGrantDeadlines(ctx, prepared, prepared.nat46Model)
+}
+
+func validateMappedTargetGrantDeadlines(ctx context.Context, prepared *preparedGuardBatch, model *nativeNAT46Model) error {
+	if model == nil || prepared.sourcePublication == nil {
 		return ctx.Err()
 	}
-	model, publication := prepared.nat46Model, prepared.sourcePublication
+	publication := prepared.sourcePublication
 	snapshot, err := publication.evidence.Snapshot(ctx)
 	if err != nil {
 		return err
@@ -80,7 +84,7 @@ func validateNAT46TargetGrantDeadlines(ctx context.Context, prepared *preparedGu
 	for _, mapping := range model.mappings {
 		mappings[mapping.alias] = mapping
 	}
-	changes, err := decodeGuardChanges(prepared.batch.data)
+	changes, err := decodePreparedGuardChanges(prepared)
 	if err != nil {
 		return err
 	}
@@ -90,7 +94,7 @@ func validateNAT46TargetGrantDeadlines(ctx context.Context, prepared *preparedGu
 			continue
 		}
 		element := command.Add.Element
-		if !slices.Contains(nativeNAT46TargetGrantRefs(), objectReference{Family: element.Family, Table: element.Table, Name: element.Name}) {
+		if !slices.Contains(nativeMappedTargetGrantRefs(model.policyNamespace()), objectReference{Family: element.Family, Table: element.Table, Name: element.Name}) {
 			continue
 		}
 		for _, raw := range element.Values {

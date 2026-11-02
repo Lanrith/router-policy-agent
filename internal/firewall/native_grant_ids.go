@@ -211,7 +211,7 @@ func validateNativeIDGrantDeadlines(ctx context.Context, prepared *preparedGuard
 		indexes[identity] = index
 	}
 	slices.SortFunc(inventory, compareNativeIP)
-	changes, err := decodeGuardChanges(prepared.batch.data)
+	changes, err := decodePreparedGuardChanges(prepared)
 	if err != nil {
 		return err
 	}

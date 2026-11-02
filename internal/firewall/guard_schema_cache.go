@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"sync/atomic"
 )
@@ -15,6 +16,10 @@ import (
 func (layout *guardLayout) freezeInspectionSchemas(ctx context.Context) error {
 	if ctx == nil || layout == nil || layout.inspectionSchemas != nil {
 		return errors.New("firewall: missing or already frozen inspection layout")
+	}
+	callbacks, err := layout.nat64CallbackModels()
+	if err != nil {
+		return err
 	}
 	compiled := map[string]*guardTableSchema{}
 	for _, family := range []string{"inet", "netdev"} {
@@ -49,6 +54,7 @@ func (layout *guardLayout) freezeInspectionSchemas(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	layout.callbackModels = slices.Clone(callbacks)
 	layout.inspectionSchemas = compiled
 	return nil
 }

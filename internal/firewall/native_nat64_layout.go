@@ -14,12 +14,33 @@ import (
 // It remains separate from installed profile admission until all raw/wire
 // authorization and physical paths are qualified together.
 func newNativeNAT64AccessLayout(ctx context.Context, baseline policy.Baseline, componentID string) (*guardLayout, error) {
+	return newNativeNAT64Layout(ctx, baseline, componentID, false)
+}
+
+// This prototype selects callback data/tuple objects before schema freezing.
+// It installs no callback forwarding hooks and is not a profile admission mode.
+func newNativeNAT64CallbackWriterLayout(ctx context.Context, baseline policy.Baseline, componentID string) (*guardLayout, error) {
+	return newNativeNAT64Layout(ctx, baseline, componentID, true)
+}
+
+func newNativeNAT64Layout(ctx context.Context, baseline policy.Baseline, componentID string, callbacks bool) (*guardLayout, error) {
 	if ctx == nil || len(baseline.NAT46) != 0 || len(baseline.NAT46Pools) != 0 {
 		return nil, errors.New("firewall: missing or combined NAT64 access geometry")
 	}
 	transport, err := newNativeNAT64Transport(ctx, baseline, componentID)
 	if err != nil {
 		return nil, err
+	}
+	if callbacks {
+		callback, err := newNativeNAT64CallbackTransport(ctx, transport)
+		if err != nil {
+			return nil, err
+		}
+		model, err := newNativeNAT64CallbackModel(ctx, baseline, callback)
+		if err != nil {
+			return nil, err
+		}
+		callback.grants = model
 	}
 	rules, err := newNativeRuleSet(baseline)
 	if err != nil {

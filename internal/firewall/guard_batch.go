@@ -27,6 +27,7 @@ type preparedGuardBatch struct {
 	nat64Transport     *nativeNAT64Transport
 	nat64Transports    []*nativeNAT64Transport
 	nat64GrantOrigins  []*nativeNAT64GrantOrigin
+	nat64Callbacks     []*nativeNAT64CallbackModel
 }
 
 type guardChanges struct {
@@ -326,11 +327,21 @@ func guardAdd(family, name string, values []json.RawMessage) change {
 }
 
 func decodeGuardChanges(data []byte) (guardChanges, error) {
+	return decodeGuardChangesWithExtra(data, 0)
+}
+
+// Only an original typed callback inventory can add up to eight mirrored
+// collections per component (flush plus addition). Generic callers keep their
+// previous operation quota and still cannot authorize these collections.
+func decodeGuardChangesWithExtra(data []byte, extra int) (guardChanges, error) {
+	if extra < 0 || extra > 4*8*2 {
+		return guardChanges{}, errors.New("firewall: invalid callback operation quota")
+	}
 	commands, err := decodeNftablesArray(data, maximumBatch)
 	if err != nil {
 		return guardChanges{}, err
 	}
-	if len(commands) < 3*len(grantSets) || len(commands) > 8*len(grantSets)+6+16+2*len(nativeIDLeaseRefs()) {
+	if len(commands) < 3*len(grantSets) || len(commands) > 8*len(grantSets)+6+16+2*len(nativeIDLeaseRefs())+extra {
 		return guardChanges{}, errors.New("firewall: guarded transaction size invalid")
 	}
 	decoded := guardChanges{Commands: make([]change, 0, len(commands))}

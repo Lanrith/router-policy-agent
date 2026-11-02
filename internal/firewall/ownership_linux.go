@@ -211,6 +211,10 @@ func (b *guardedBackend) clearOwnership(ctx context.Context) error {
 }
 
 func inspectOwnershipClear(ctx context.Context, layout *guardLayout, listing guardListings) error {
+	callbacks, err := layout.nat64CallbackModels()
+	if err != nil {
+		return err
+	}
 	for _, item := range []struct {
 		family string
 		data   []byte
@@ -251,7 +255,8 @@ func inspectOwnershipClear(ctx context.Context, layout *guardLayout, listing gua
 			}
 		}
 		if layout.native != nil && len(layout.native.selectedNAT64Transports()) != 0 {
-			for _, ref := range nativeNAT64GrantRefs() {
+			refs := append(nativeNAT64GrantRefs(), nativeNAT64CallbackGrantRefs(callbacks)...)
+			for _, ref := range refs {
 				if ref.Family == item.family && len(observed.sets[ref.Name].Elements) != 0 {
 					return errors.New("firewall: NAT64 delegated grant remained after source revocation")
 				}

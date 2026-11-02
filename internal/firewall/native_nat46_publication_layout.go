@@ -42,9 +42,20 @@ func (layout *guardLayout) nat46BasePublicationDefinitions(ctx context.Context, 
 	if layout != nil && layout.native != nil {
 		transports = layout.native.selectedNAT64Transports()
 	}
+	models, err := nativeNAT64CallbackModels(transports)
+	if err != nil {
+		return nil, err
+	}
+	callbackDefinitions := []string{}
+	for _, model := range models {
+		if model != nil {
+			callbackDefinitions = append(callbackDefinitions, nativeMappedTargetGrantDefinitions(family, model.mapped.policyNamespace())...)
+		}
+	}
 	if sources == nil {
 		if len(transports) != 0 {
 			definitions := nativeNAT64GrantDefinitions(family)
+			definitions = append(definitions, callbackDefinitions...)
 			if family == "inet" {
 				for _, transport := range transports {
 					definitions = append(definitions, transport.definitions()...)
@@ -72,6 +83,7 @@ func (layout *guardLayout) nat46BasePublicationDefinitions(ctx context.Context, 
 	if len(transports) != 0 {
 		definitions = append(definitions, nativeNAT64GrantDefinitions(family)...)
 	}
+	definitions = append(definitions, callbackDefinitions...)
 	return definitions, ctx.Err()
 }
 
@@ -80,6 +92,15 @@ func (layout *guardLayout) nat46PublicationSchema(ctx context.Context, schema *g
 	var transports []*nativeNAT64Transport
 	if layout != nil && layout.native != nil {
 		transports = layout.native.selectedNAT64Transports()
+	}
+	models, err := nativeNAT64CallbackModels(transports)
+	if err != nil {
+		return err
+	}
+	for _, model := range models {
+		if model != nil {
+			nativeMappedTargetGrantSchema(schema, family, model.mapped.policyNamespace())
+		}
 	}
 	if family == "netdev" {
 		for _, transport := range transports {

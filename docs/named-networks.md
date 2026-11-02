@@ -340,8 +340,21 @@ ownership epoch and expiry. Its collections have a distinct component namespace;
 generic mutation cannot publish them. Deny-only cleanup needs no fresh positive
 translator or ownership proof. Eight directory cases exercise the original
 compiler, classifier and renderer before projection, including earlier owner
-denies and unsatisfied listener or identity requirements. This remains separate
-from a fully joined typed writer and packet admission.
+denies and unsatisfied listener or identity requirements.
+
+A data-only writer prototype freezes these collections before publication and
+retains the original callback model, source receipt and runtime activation.
+Before mutation it rederives the complete transaction and checks each original
+deadline. Independent readback checks the recipient's IPv6 ownership, logical
+caller and listener, epoch, lifetime and both table mirrors. Source transitions
+and sealing clear callback grants without positive readiness. Permanent deny
+history also covers classified recipients' aliases and embedded addresses.
+
+The dummy-link backend fixture exercises actual nftables transactions, changed
+wire grants, queued activation replacement, damaged mirrors, source revocation
+and readiness loss. This constructor installs no callback forwarding hooks and
+is not an installed profile mode. Packet admission still needs the joined source,
+recipient, tuple, grant and physical checks described below.
 
 The callback policy fixture exercises TCP/UDP/echo, terminal directory decisions,
 scoped current listener grants, independent physical revocation, wrong callers
