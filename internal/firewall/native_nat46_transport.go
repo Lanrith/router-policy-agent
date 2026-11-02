@@ -78,6 +78,7 @@ func newNativeNAT46SharedTransport(ctx context.Context, sources *nativeNAT46Stat
 
 type nativeNAT46Leg struct {
 	name, protocol string
+	component      string
 	mapping        nativeNAT46Mapping
 	prefix         netip.Prefix
 	reply          bool
@@ -159,18 +160,26 @@ func (transport *nativeNAT46Transport) definitions() []string {
 	return result
 }
 
+func (leg nativeNAT46Leg) translator() string {
+	if leg.component != "" {
+		return leg.component
+	}
+	return "nat46"
+}
+
 func (leg nativeNAT46Leg) geometry(imported bool) nativeScope {
-	iface := nativeMatch("oifname \"nat46\"", guardMeta("oifname"), "nat46")
+	component := leg.translator()
+	iface := nativeInterface("oifname", component)
 	family, field, address := "ip", "daddr", leg.mapping.alias.String()
 	if imported {
-		iface = nativeMatch("iifname \"nat46\"", guardMeta("iifname"), "nat46")
+		iface = nativeInterface("iifname", component)
 	}
 	if leg.reply == imported {
 		other := "iifname"
 		if imported {
 			other = "oifname"
 		}
-		iface = nativeJoin(iface, nativeScope{text: other + " != \"nat46\"", expressions: []any{map[string]any{"match": map[string]any{"op": "!=", "left": guardMeta(other), "right": "nat46"}}}})
+		iface = nativeJoin(iface, nativeScope{text: fmt.Sprintf("%s != %q", other, component), expressions: []any{map[string]any{"match": map[string]any{"op": "!=", "left": guardMeta(other), "right": component}}}})
 	}
 	if leg.reply != imported {
 		family, field, address = "ip6", "saddr", leg.mapping.target.String()

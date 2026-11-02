@@ -29,6 +29,7 @@ type nativeNAT64Transport struct {
 	managedIPv4     []netip.Prefix
 	legs            []nativeNAT64Leg
 	ruleCount       int
+	callbacks       *nativeNAT64CallbackTransport
 }
 
 type nativeNAT64Leg struct {
@@ -208,6 +209,9 @@ func (transport *nativeNAT64Transport) definitions() []string {
 			}
 		}
 	}
+	if transport.callbacks != nil {
+		result = append(result, transport.callbacks.proof.definitions()...)
+	}
 	return result
 }
 
@@ -228,6 +232,9 @@ func (transport *nativeNAT64Transport) tupleProofClears() []any {
 				}}})
 			}
 		}
+	}
+	if transport.callbacks != nil {
+		operations = append(operations, transport.callbacks.clears()...)
 	}
 	return operations
 }
@@ -408,6 +415,11 @@ func (transport *nativeNAT64Transport) chains() map[string][]nativeScope {
 			}
 		}
 	}
+	if transport.callbacks != nil {
+		for name, rules := range transport.callbacks.chains() {
+			chains[name] = rules
+		}
+	}
 	return chains
 }
 
@@ -460,6 +472,15 @@ func (transport *nativeNAT64Transport) schema() *guardTableSchema {
 				header["map"], header["flags"], header["timeout"] = "classid", []string{"timeout", "dynamic"}, 2
 				schema.maps[name] = header
 			}
+		}
+	}
+	if transport.callbacks != nil {
+		callback := transport.callbacks.proof.schema()
+		for name, header := range callback.maps {
+			schema.maps[name] = header
+		}
+		for name, header := range callback.sets {
+			schema.sets[name] = header
 		}
 	}
 	for name, rules := range transport.chains() {

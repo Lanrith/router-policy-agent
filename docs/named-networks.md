@@ -287,10 +287,35 @@ grants after readiness loss. It uses dummy links and synthetic readiness rather
 than a translator process. Neither fixture is evidence of a live IPv6 binding
 producer or image activation.
 
-These fixtures use synthetic ownership and source readiness. IPv4-initiated
-callbacks through NAT64 source aliases still require implementation and
-qualification. Actual IPv6 ownership production, WAN source NAT, correlated
-errors and complete image activation remain unqualified.
+A separate construction-only component now supplies callback tuple correlation
+for retained ready NAT64 source aliases on their selected attachment. A callback
+starts an IPv4 connection toward a mapped IPv6 endpoint. It cannot consume the
+proof for an established reply to an earlier IPv6-initiated connection. Its
+mapping, protocol, direction and complete metadata tuple have their own object
+names. Each leg also requires the selected component's current allocation.
+
+The component reuses the mapped IPv4/IPv6 transport with an explicit attachment;
+ordinary NAT46 retains its original attachment and generated program. Callback
+proofs join the NAT64 allocation/token withdrawal inventory. After allocation
+recovery, an old packet still needs a newly exported callback proof. Unready
+reservations and undeclared or ambiguous native target attachments remain closed.
+
+The complete callback transport and original NAT46 packet fixtures pass in an
+isolated VM with their existing assertions and time limits. They exercise six
+synthetic maps, TCP/UDP/echo, listener checks, wrong addresses and interfaces,
+missing or expired proofs, physical metadata/header changes, independent source
+withdrawal and immutable connection epochs. The callback case also exercises
+allocation withdrawal and recovery. The VM runner retains its original first
+three groups and splits the growing translation tail into groups of at most
+three. Its 360-second VM limit and 90-second fixture limits are unchanged.
+These fixtures use synthetic caller grants
+and conversion frames; they do not qualify callback ordered-policy compilation,
+actual TAYGA conversion or live authorities.
+
+Default profiles still deny new callbacks. Complete callback policy/grant and
+physical-path integration remains required, including the component's IPv4
+source-class restrictions. Actual IPv6 ownership production, WAN source NAT,
+correlated errors and complete image activation also remain unqualified.
 
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection

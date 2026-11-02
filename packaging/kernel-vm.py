@@ -77,6 +77,7 @@ EXPECTED_TESTS = [
     'TestKernelNamedNAT64JoinedDynamicRecipientWithCallerHistory',
     'TestKernelNamedNAT64JoinedDynamicSourceGrantToOwnedTarget',
     'TestKernelNamedNAT64DynamicGrantPublicationFences',
+    'TestKernelNamedNAT64CallbackTupleTransport',
     'TestKernelNamedCombinedTranslationLayout',
 ]
 
@@ -212,7 +213,12 @@ def vm_batches(tests):
     # writer fences, binary and source inventory.
     # The aggregate can pass only after every selected fixture passes once.
     if tests == EXPECTED_TESTS:
-        return [tests[:14], tests[14:19], tests[19:29], tests[29:]]
+        # Retain the original three qualified groups. Keep the growing
+        # translation tail below the VM's unchanged 360-second bound even
+        # when three fixtures each consume their 90-second allowance.
+        tail = tests[29:]
+        return [tests[:14], tests[14:19], tests[19:29]] + [tail[index:index+3]
+                                                        for index in range(0, len(tail), 3)]
     return [tests]
 
 
