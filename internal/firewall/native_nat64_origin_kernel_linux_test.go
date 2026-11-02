@@ -33,6 +33,7 @@ func TestKernelNamedNAT64OriginCaptureAndConnectionBinding(t *testing.T) {
 		expected = append(expected, fmt.Sprintf("%s . %d", epochClassID(marker), port))
 	}
 	const table = "n64_origin_fixture"
+	setupPacketEndpointSinks(ctx, t, table)
 	lines := []string{"table inet " + table + " {",
 		"map origin_by_port { type inet_service : classid; elements = { " + strings.Join(origins, ", ") + " }; }",
 		"map connection_by_port { type inet_service : mark; elements = { " + strings.Join(connections, ", ") + " }; }",
@@ -76,11 +77,13 @@ func TestKernelNamedNAT64OriginCaptureAndConnectionBinding(t *testing.T) {
 		packetNft(cleanup, t, "delete table inet "+table)
 	})
 	client, target := packetSocket(t, "peer0"), packetSocket(t, "device0")
+	attempt := 0
 	probe := func(t *testing.T, index int, allowed bool) {
 		t.Helper()
+		attempt++
 		packet := packetDatagram{source: netip.MustParseAddr("10.240.0.10"), destination: netip.MustParseAddr("10.240.3.10"),
 			sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
-			sourcePort: uint16(63000 + index), destinationPort: uint16(6161 + index), payload: fmt.Sprintf("origin-word-%d", index)} // #nosec G115 -- indices are bounded to six fixture cases.
+			sourcePort: uint16(63000 + index), destinationPort: uint16(6161 + index), payload: fmt.Sprintf("origin-word-%d-%d", index, attempt)} // #nosec G115 -- indices are bounded to six fixture cases.
 		sendPacket(ctx, t, client, packetFrame(t, packet))
 		packet.sourceMAC, packet.destinationMAC = "02:00:00:00:01:13", "02:00:00:00:00:13"
 		receivePacket(ctx, t, target, packetFrame(t, packet), allowed)
@@ -107,4 +110,7 @@ func TestKernelNamedNAT64OriginCaptureAndConnectionBinding(t *testing.T) {
 		probe(t, 5, false)
 	})
 	t.Run("unaffected-existing-connection", func(t *testing.T) { probe(t, 3, true) })
+	if got := guardFamilyCounter(ctx, t, "netdev", table, "device_datagrams"); got != 6 {
+		t.Fatal("raw endpoint did not observe exactly the admitted datagrams", got)
+	}
 }

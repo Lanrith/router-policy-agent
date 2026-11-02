@@ -44,6 +44,7 @@ func TestKernelNamedNAT64OriginIdentityCaptureAndBinding(t *testing.T) {
 		expected = append(expected, fmt.Sprintf("%s . %d", epochClassID(word), port))
 	}
 	const table = "n64_origin_identity_fixture"
+	setupPacketEndpointSinks(ctx, t, table)
 	lines := []string{"table inet " + table + " {",
 		"map contexts { type inet_service : mark; elements = { " + strings.Join(contextRows, ", ") + " }; }",
 		"map channels { type inet_service : classid; elements = { " + strings.Join(channelRows, ", ") + " }; }",
@@ -92,11 +93,13 @@ func TestKernelNamedNAT64OriginIdentityCaptureAndBinding(t *testing.T) {
 		packetNft(cleanup, t, "delete table inet "+table)
 	})
 	client, target := packetSocket(t, "peer0"), packetSocket(t, "device0")
+	attempt := 0
 	probe := func(t *testing.T, index int, allowed bool) {
 		t.Helper()
+		attempt++
 		packet := packetDatagram{source: netip.MustParseAddr("10.240.0.10"), destination: netip.MustParseAddr("10.240.3.10"),
 			sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
-			sourcePort: uint16(63200 + index), destinationPort: uint16(6160 + index), payload: fmt.Sprintf("origin-identity-%d", index)} // #nosec G115 -- the fixture has exactly 28 tuples.
+			sourcePort: uint16(63200 + index), destinationPort: uint16(6160 + index), payload: fmt.Sprintf("origin-identity-%d-%d", index, attempt)} // #nosec G115 -- the fixture has exactly 28 tuples.
 		sendPacket(ctx, t, client, packetFrame(t, packet))
 		packet.sourceMAC, packet.destinationMAC = "02:00:00:00:01:13", "02:00:00:00:00:13"
 		receivePacket(ctx, t, target, packetFrame(t, packet), allowed)
@@ -129,4 +132,7 @@ func TestKernelNamedNAT64OriginIdentityCaptureAndBinding(t *testing.T) {
 		probe(t, 27, false)
 	})
 	t.Run("unchanged-identity-remains-admitted", func(t *testing.T) { probe(t, 0, true) })
+	if got := guardFamilyCounter(ctx, t, "netdev", table, "device_datagrams"); got != 28 {
+		t.Fatal("raw endpoint did not observe exactly the admitted datagrams", got)
+	}
 }
