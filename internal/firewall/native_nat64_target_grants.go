@@ -20,10 +20,15 @@ func (transport *nativeNAT64Transport) projectTargetValues(ctx context.Context, 
 		return nil, err
 	}
 	ids := nativeNAT64AddressIDs(snapshot, false)
+	callerIDs := nativeNAT64IPv6SourceIDs(snapshot)
+	ownedCallers := map[netip.Addr]nativeNAT64OwnedCaller{}
 	indexes := map[nativeSourceIP]int{}
 	for index, address := range snapshot.Addresses {
+		identity := nativeSourceIP{nativeSourceIdentity: nativeSourceIdentity{iface: address.Interface, mac: address.MAC}, address: address.Address}
 		if address.Address.Is4() {
-			indexes[nativeSourceIP{nativeSourceIdentity: nativeSourceIdentity{iface: address.Interface, mac: address.MAC}, address: address.Address}] = index
+			indexes[identity] = index
+		} else if nativeNAT64AddressIn(address.Address, transport.sourceNetworks[address.Interface]) {
+			ownedCallers[address.Address] = nativeNAT64OwnedCaller{index: index, id: callerIDs[identity]}
 		}
 	}
 	callers := map[netip.Addr]netip.Addr{}
@@ -58,6 +63,13 @@ func (transport *nativeNAT64Transport) projectTargetValues(ctx context.Context, 
 			index, published := indexes[identity]
 			caller, mapped := callers[tuple.peer]
 			if !known || !published || !mapped {
+				continue
+			}
+			eligible, err := transport.geometry.EligibleTarget(ctx, transport.component, tuple.device)
+			if err != nil {
+				return nil, err
+			}
+			if !eligible {
 				continue
 			}
 			remaining, err := publication.remaining(ctx, index, anchor)
@@ -99,6 +111,12 @@ func (transport *nativeNAT64Transport) projectTargetValues(ctx context.Context, 
 				values[name][string(key)] = max(values[name][string(key)], timeout)
 				if len(values[name]) > maximumTupleCount {
 					return nil, errors.New("firewall: NAT64 target grants exceed capacity")
+				}
+			}
+			if owned, ok := ownedCallers[caller]; ok {
+				grant := nativeNAT64RecipientGrant{caller: owned, epoch: snapshot.Epoch, target: tuple.device, protocol: protocol, port: tuple.port, timeout: timeout}
+				if err := transport.projectRecipientValues(ctx, publication, utc, anchor, grant, values); err != nil {
+					return nil, err
 				}
 			}
 		}

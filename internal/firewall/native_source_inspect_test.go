@@ -42,6 +42,8 @@ func nativeSourceListingFixture() (*guardTableObservation, *guardTableObservatio
 	inet.sets[nativeSourceLive4] = listedSet{Elements: append([]json.RawMessage(nil), netdev.sets[nativeSourceLive4].Elements...)}
 	inet.sets[nativeSourceLive6] = listedSet{Elements: append([]json.RawMessage(nil), netdev.sets[nativeSourceLive6].Elements...)}
 	inet.sets[nativeSourceBits4] = listedSet{Elements: []json.RawMessage{json.RawMessage(`{"elem":{"val":{"concat":[0,"0:2",183501579]},"timeout":50,"expires":49}}`)}}
+	inet.sets[nativeSourceEpoch4] = listedSet{Elements: []json.RawMessage{json.RawMessage(`{"elem":{"val":{"concat":["0:1c00",183501579]},"timeout":50,"expires":49}}`)}}
+	netdev.sets[nativeSourceEpoch4] = listedSet{Elements: append([]json.RawMessage(nil), inet.sets[nativeSourceEpoch4].Elements...)}
 	netdev.sets[nativeSourceBits4] = listedSet{Elements: append([]json.RawMessage(nil), inet.sets[nativeSourceBits4].Elements...)}
 	return inet, netdev
 }
@@ -68,6 +70,12 @@ func TestNativeSourceInspectionRejectsIdentityGenerationAndLifetimeDrift(t *test
 		name, object, before, after string
 		physical                    bool
 	}{
+		{"ipv4 source epoch identity", nativeSourceEpoch4, `"0:1c00"`, `"0:2000"`, false},
+		{"ipv4 source epoch address", nativeSourceEpoch4, `183501579`, `183501580`, false},
+		{"ipv4 source epoch deadline", nativeSourceEpoch4, `"timeout":50`, `"timeout":71`, false},
+		{"physical ipv4 source epoch identity", nativeSourceEpoch4, `"0:1c00"`, `"0:2000"`, true},
+		{"physical ipv4 source epoch address", nativeSourceEpoch4, `183501579`, `183501580`, true},
+		{"physical ipv4 source epoch deadline", nativeSourceEpoch4, `"timeout":50`, `"timeout":71`, true},
 		{"ipv6 source epoch identity", nativeSourceEpoch6, `"0:1c00"`, `"0:2000"`, true},
 		{"ipv6 source epoch address", nativeSourceEpoch6, `"fdca:1a2b:3::12"`, `"fdca:1a2b:3::13"`, true},
 		{"ipv6 source epoch deadline", nativeSourceEpoch6, `"timeout":27`, `"timeout":71`, true},

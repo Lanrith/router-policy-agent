@@ -184,7 +184,7 @@ func TestNAT46OwnershipRevocationKeepsOrdinaryNativeAndConfigurationObjectsSepar
 	var first, second struct {
 		Commands []json.RawMessage `json:"nftables"`
 	}
-	if json.Unmarshal(ordinary.batch.data, &first) != nil || json.Unmarshal(translated.batch.data, &second) != nil || len(first.Commands) != 34 || len(second.Commands) != 45 {
+	if json.Unmarshal(ordinary.batch.data, &first) != nil || json.Unmarshal(translated.batch.data, &second) != nil || len(first.Commands) != 36 || len(second.Commands) != 47 {
 		t.Fatal("source revocation changed its fixed selected inventory", len(first.Commands), len(second.Commands))
 	}
 	if sourceCount, grantCount := nat46ModeFlushes(t, translated.batch.data); sourceCount != 3 || grantCount != 8 {

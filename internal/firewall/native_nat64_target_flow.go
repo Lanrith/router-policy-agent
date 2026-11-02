@@ -76,6 +76,10 @@ func (access *nativeAccess) compileNAT64TranslatedSource(transport *nativeNAT64T
 	for _, directory := range []bool{false, true} {
 		access.add(chain, nativeNAT64CurrentTarget(leg, true, directory), nativeVerdict("return", ""))
 	}
+	_, epoch := epochChannelNames(false)
+	for _, kind := range []uint64{nativeTag(false, true), nativeDirectoryTag(true)} {
+		access.add(chain, nativeMark(0xff000000, kind), nativePriorityEpoch(epoch), nativeNAT64SourceLive(), nativeNAT64IPv4SenderEpoch(true), nativeVerdict("return", ""))
+	}
 	access.add(chain, nativeVerdict("jump", "validate_source"))
 	access.add(chain, nativeVerdict("return", ""))
 	return chain

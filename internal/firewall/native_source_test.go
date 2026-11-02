@@ -163,7 +163,7 @@ func TestNativeSourceMetadataRejectsAmbiguousOrUnboundedInputs(t *testing.T) {
 func TestNativeSourceClearCanOnlyWithdrawItsFixedObjects(t *testing.T) {
 	t.Parallel()
 	operations, err := nativeSourceChanges(t.Context(), policy.OwnershipSnapshot{}, nil, 0)
-	if err != nil || len(operations) != 17 {
+	if err != nil || len(operations) != 19 {
 		t.Fatal("native source withdrawal did not retain its fixed scope", err)
 	}
 	if len(nativeSourceElements(t, operations)) != 0 {
@@ -265,7 +265,7 @@ func TestNativeSourcePreparationCannotSubstituteBytesForItsOwnershipProof(t *tes
 	var commands struct {
 		Commands []json.RawMessage `json:"nftables"`
 	}
-	if err := json.Unmarshal(revocation.batch.data, &commands); err != nil || len(commands.Commands) != 34 {
+	if err := json.Unmarshal(revocation.batch.data, &commands); err != nil || len(commands.Commands) != 36 {
 		t.Fatal("native withdrawal omitted its ownership, epoch or identity objects", err)
 	}
 }

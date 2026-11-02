@@ -240,11 +240,33 @@ target addresses retained in classification history are checked against the
 actual IPv4 target after translation. Raw carrier egress retains its source
 identity, floor and epoch checks while supplying connectivity to the translator.
 
-These fixtures use synthetic ownership and source readiness. Target-grant
-selection for already owned IPv6 callers, grants using dynamic source aliases
-and IPv4-initiated callbacks through NAT64 source aliases still require
-implementation and qualification. Actual IPv6 ownership production, WAN source
-NAT, correlated errors and complete image activation remain unqualified.
+A recipient's exact listener grant can also authorize a currently owned IPv6
+caller through its configured source alias. The projection keeps the caller's
+IPv6 UID and ownership epoch; it cannot substitute the recipient's IPv4 UID.
+Its deadline is bounded by the original caller ownership, target ownership and
+recipient grant. Source and recipient grants both pass through the actual
+directory compiler, renderer and classifier before packet qualification.
+Placement alone supplies no access grant.
+
+The allocated IPv4 source and return alias represent the original caller through
+exact imported tuple proofs. They retain current caller ownership and ordered
+policy checks without treating that alias as a native device on the translator
+attachment. Managed or classified IPv4 return senders require an independent
+current epoch/address proof at physical egress. This proof is derived from the
+original ownership receipt, mirrored in both table families and cleared with
+ownership; it supplies no permission. Target expiry closes both a fresh request
+and an admitted reply while the caller and its source grant remain current.
+
+Real-TAYGA fixtures cover recipient-only permission with and without caller
+classification history, source permission to an owned target, and owner
+permission with both endpoints owned. The caller and target deliberately have
+different address-family UIDs. Wrong attachments and MACs, expired or withdrawn
+grants, missing sender proofs and stale tuples remain closed.
+
+These fixtures use synthetic ownership and source readiness. Grants using
+dynamic source aliases and IPv4-initiated callbacks through NAT64 source aliases
+still require implementation and qualification. Actual IPv6 ownership production,
+WAN source NAT, correlated errors and complete image activation remain unqualified.
 
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection

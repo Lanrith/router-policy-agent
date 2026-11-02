@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,14 +54,39 @@ func TestKernelNamedNAT64JoinedTargetDirectory(t *testing.T) {
 	testKernelNamedNAT64JoinedTAYGA(t, "target_directory", true, true)
 }
 
+func TestKernelNamedNAT64JoinedRecipientGrant(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "recipient", true, true)
+}
+
+func TestKernelNamedNAT64JoinedRecipientGrantWithCallerHistory(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "recipient_cohort", true, true)
+}
+
+func TestKernelNamedNAT64JoinedSourceGrantToOwnedTarget(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "paired_directory", true, true)
+}
+
+func TestKernelNamedNAT64JoinedOwnedTargetExpiry(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "paired_directory_expiry", true, true)
+}
+
+func TestKernelNamedNAT64JoinedOwnedCallerAndTarget(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "paired_owner", true, true)
+}
+
 func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalInterface, separateRules bool) {
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
-	if authorization != "configuration" && authorization != "owner" && authorization != "directory" && authorization != "split" && authorization != "target" && authorization != "target_directory" {
+	recipient := authorization == "recipient" || authorization == "recipient_cohort"
+	pairedOwner := authorization == "paired_owner"
+	targetExpiry := authorization == "paired_directory_expiry"
+	pairedDirectory := authorization == "paired_directory" || targetExpiry
+	if authorization != "configuration" && authorization != "owner" && authorization != "directory" && authorization != "split" && authorization != "target" && authorization != "target_directory" && !recipient && !pairedOwner && !pairedDirectory {
 		t.Fatal("unknown NAT64 fixture authorization", authorization)
 	}
-	targetOwned := authorization == "target" || authorization == "target_directory"
-	sourceOwned, directory := authorization != "configuration" && !targetOwned, authorization == "directory" || authorization == "split" || authorization == "target_directory"
+	targetOwned := authorization == "target" || authorization == "target_directory" || recipient || pairedOwner || pairedDirectory
+	sourceOwned := authorization != "configuration" && (!targetOwned || recipient || pairedOwner || pairedDirectory)
+	directory := authorization == "directory" || authorization == "split" || authorization == "target_directory" || recipient || pairedDirectory
 	portBase := uint16(48000)
 	if finalInterface {
 		// These tests share one disposable netns. Link/table cleanup does not
@@ -81,6 +107,16 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		portBase = 38000
 	case "target_directory":
 		portBase = 36000
+	case "recipient":
+		portBase = 34000
+	case "recipient_cohort":
+		portBase = 32000
+	case "paired_owner":
+		portBase = 30000
+	case "paired_directory":
+		portBase = 28000
+	case "paired_directory_expiry":
+		portBase = 26000
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
@@ -145,7 +181,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		b.NetworkModel.ManagedNetworks = []policy.Role{b.Zones[0].Role}
 	}
 	if targetOwned {
-		b.NetworkModel.ManagedNetworks = []policy.Role{b.Zones[1].Role}
+		b.NetworkModel.ManagedNetworks = append(b.NetworkModel.ManagedNetworks, b.Zones[1].Role)
 	}
 	pool := netip.MustParsePrefix("10.251.0.0/24")
 	b.NAT64 = []policy.NAT64{{
@@ -256,7 +292,21 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 				AssociatedAt: now, AssociationID: "nat64-owner-association", Addresses: []binding.Address{{IP: netip.MustParseAddr("fdca:1a2b::10"),
 					Source: "qualified_ipv6", OwnershipID: "nat64-owner-address", ObservedAt: now, ValidUntil: now.Add(90 * time.Second)}}}}}
 		if targetOwned {
-			snapshot.Records = []binding.Record{{MAC: targetMAC, NAS: "synthetic-nas", Interface: "lan13", VLAN: 13, AssociatedAt: now, AssociationID: "nat64-target-association", Addresses: []binding.Address{{IP: netip.MustParseAddr("10.240.4.11"), Source: "kea_dhcp4", OwnershipID: "nat64-target-address", ObservedAt: now, ValidUntil: now.Add(90 * time.Second)}}}}
+			targets := []binding.Record{{MAC: targetMAC, NAS: "synthetic-nas", Interface: "lan13", VLAN: 13, AssociatedAt: now, AssociationID: "nat64-target-association", Addresses: []binding.Address{{IP: netip.MustParseAddr("10.240.4.11"), Source: "kea_dhcp4", OwnershipID: "nat64-target-address", ObservedAt: now, ValidUntil: now.Add(90 * time.Second)}}}}
+			if targetExpiry {
+				targets[0].Addresses[0].ValidUntil = now.Add(10 * time.Second)
+			}
+			if sourceOwned {
+				snapshot.Records = append(snapshot.Records, targets...)
+			} else {
+				snapshot.Records = targets
+			}
+		}
+		if recipient || pairedOwner || pairedDirectory {
+			// An unused IPv6 identity sorts before the caller. Its UID cannot
+			// become the caller or be confused with the IPv4 target's UID.
+			snapshot.Records = append(snapshot.Records, binding.Record{MAC: "02:00:00:00:00:09", NAS: "synthetic-nas", Interface: "lan10", VLAN: 10,
+				AssociatedAt: now, AssociationID: "unused-owned-caller", Addresses: []binding.Address{{IP: netip.MustParseAddr("fdca:1a2b::9"), Source: "qualified_ipv6", OwnershipID: "unused-owned-caller-address", ObservedAt: now, ValidUntil: now.Add(90 * time.Second)}}})
 		}
 		proof, compileErr := compiler.CompileOwnership(ctx, snapshot, now, policy.CaptureAge())
 		if compileErr != nil {
@@ -301,7 +351,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 	applyNAT64Publication(ctx, t, publisher, commandInput{op: applyNAT64Allocations, nat64Allocation: allocations})
 	applyNAT64Publication(ctx, t, publisher, commandInput{op: applyNAT64Tokens, nat64Tokens: tokens})
 	grantPeer := "fdca:1a2b:e064::af0:30a"
-	if authorization == "split" {
+	if authorization == "split" || pairedDirectory {
 		grantPeer = "fdca:1a2b:e064::af0:40b"
 	}
 	publishDirectory := func(timeout int, enabled bool, protocols ...string) {
@@ -309,75 +359,78 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		if len(protocols) == 0 {
 			protocols = []string{"tcp", "udp"}
 		}
-		logical := guardChanges{}
-		for _, name := range grantSets {
-			logical.Commands = append(logical.Commands, change{Flush: &setChange{Set: ownedRef(name)}})
+		anchor := policy.CaptureAge()
+		utc := time.Now().UTC()
+		_, _, _, input := renderFixture(t)
+		input.Now, input.Directory.ObservedAt, input.Bindings = utc, utc, ownershipBindings
+		role, mac, peer, direction := b.Zones[0].Role, "02:00:00:00:00:10", grantPeer, policy.FromDevice
+		if targetOwned && !pairedDirectory {
+			role, mac, peer, direction = b.Zones[1].Role, "02:00:00:00:00:14", "fdca:1a2b::10", policy.ToDevice
 		}
-		if enabled && !targetOwned {
-			for _, protocol := range protocols {
-				fields := []any{"lan10", "02:00:00:00:00:10", "fdca:1a2b::10", grantPeer, 6061}
-				name := "lease_from6_" + protocol
-				value, marshalErr := json.Marshal(map[string]any{"elem": map[string]any{"timeout": timeout, "val": map[string]any{"concat": fields}}})
-				if marshalErr != nil {
-					t.Fatal(marshalErr)
-				}
-				logical.Commands = append(logical.Commands, guardAdd("inet", name, []json.RawMessage{value}))
-			}
-		}
-		data, marshalErr := json.Marshal(logical)
+		placement, marshalErr := json.Marshal(map[string]any{"schema_version": 1, "kind": "placement", "vlan_role": role})
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
-		anchor := policy.CaptureAge()
-		utc, started := time.Now().UTC(), time.Now()
-		logicalBatch := &preparedBatch{data: data, preparedAt: utc, startedAt: started, startBefore: utc.Add(preparationBudget)}
-		history := &state.Classification{MACs: []string{"02:00:00:00:00:10"}, IPv4: []string{}, IPv6: []string{"fdca:1a2b::10"}}
-		if targetOwned {
-			history = &state.Classification{MACs: []string{"02:00:00:00:00:14"}, IPv4: []string{}, IPv6: []string{}}
-			_, _, _, input := renderFixture(t)
-			input.Now, input.Directory.ObservedAt, input.Bindings = utc, utc, ownershipBindings
-			input.Directory.Groups = input.Directory.Groups[:1]
-			device := &input.Directory.Devices[0]
-			device.MAC, device.Active, device.GroupIDs = "02:00:00:00:00:14", enabled, []string{input.Directory.Groups[0].ID}
-			// A temporary directory policy supplies the short expiry itself;
-			// the rendered/privileged grant bytes are never edited afterward.
-			expires := utc.Add(time.Duration(timeout)*time.Second + preparationBudget + commandBudget + time.Second - time.Nanosecond)
-			for _, protocol := range protocols {
-				group := rendererAccessGroup(t, "target-"+protocol, true, policy.Rule{ID: "listener", Direction: policy.ToDevice,
-					Peer: policy.Peer{Addresses: []string{"fdca:1a2b::10/128"}}, Protocol: protocol, DestinationPorts: []uint16{6061},
-					Reason: "Synthetic translated target listener", ExpiresAt: &expires})
-				input.Directory.Groups = append(input.Directory.Groups, group)
-				device.GroupIDs = append(device.GroupIDs, group.ID)
+		placementText := string(placement)
+		input.Directory.Groups = []policy.Group{{ID: "placement", Name: "Synthetic device placement", IsNetwork: true, Policy: &placementText}}
+		input.Directory.Devices = []policy.Device{{ID: "grant-device", MAC: mac, Active: enabled, GroupIDs: []string{"placement"}}}
+		history := &state.Classification{MACs: []string{mac}, IPv4: []string{}, IPv6: []string{}}
+		if pairedOwner {
+			value := state.EmptyClassification()
+			history = &value
+		}
+		// A temporary policy supplies expiry; no rendered grant is edited.
+		expires := utc.Add(time.Duration(timeout)*time.Second + preparationBudget + commandBudget + time.Second - time.Nanosecond)
+		for _, protocol := range protocols {
+			rule := policy.Rule{ID: "listener", Direction: direction, Peer: policy.Peer{Addresses: []string{peer + "/128"}}, Protocol: protocol,
+				DestinationPorts: []uint16{6061}, Reason: "Synthetic translated listener", ExpiresAt: &expires}
+			data, marshalErr := json.Marshal(map[string]any{"schema_version": 1, "kind": "access", "vlan_role": role, "temporary": true, "rules": []policy.Rule{rule}})
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
 			}
-			authorization, compileErr := compiler.CompileAuthorization(ctx, input, anchor)
-			if compileErr != nil {
-				t.Fatal(compileErr)
+			policyText := string(data)
+			group := policy.Group{ID: "listener-" + protocol, Name: "Synthetic translated listener", IsNetwork: true, Policy: &policyText}
+			input.Directory.Groups = append(input.Directory.Groups, group)
+			input.Directory.Devices[0].GroupIDs = append(input.Directory.Devices[0].GroupIDs, group.ID)
+		}
+		if authorization == "recipient_cohort" {
+			history.MACs = append([]string{"02:00:00:00:00:10"}, history.MACs...)
+			data, marshalErr := json.Marshal(map[string]any{"schema_version": 1, "kind": "placement", "vlan_role": b.Zones[0].Role})
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
 			}
-			candidate, compileErr := authorization.Snapshot(ctx)
-			want := 0
-			if enabled {
-				want = len(protocols)
+			policyText := string(data)
+			input.Directory.Groups = append(input.Directory.Groups, policy.Group{ID: "caller-placement", Name: "Synthetic caller placement", IsNetwork: true, Policy: &policyText})
+			input.Directory.Devices = append(input.Directory.Devices, policy.Device{ID: "owned-caller", MAC: "02:00:00:00:00:10", Active: true, GroupIDs: []string{"caller-placement"}})
+		}
+		authorization, compileErr := compiler.CompileAuthorization(ctx, input, anchor)
+		if compileErr != nil {
+			t.Fatal(compileErr)
+		}
+		candidate, compileErr := authorization.Snapshot(ctx)
+		want := 0
+		if enabled {
+			want = len(protocols)
+		}
+		if compileErr != nil || len(candidate.Grants) != want {
+			t.Fatal("raw directory policy did not compile its exact grants", compileErr, candidate.Denials, len(candidate.Grants), want)
+		}
+		addresses, compileErr := compiler.ClassifyBindings(ctx, input.Bindings, history.MACs, utc)
+		if compileErr != nil {
+			t.Fatal(compileErr)
+		}
+		for _, address := range addresses {
+			if address.Is4() {
+				history.IPv4 = append(history.IPv4, address.String())
+			} else {
+				history.IPv6 = append(history.IPv6, address.String())
 			}
-			if compileErr != nil || len(candidate.Grants) != want {
-				t.Fatal("raw directory target policy did not compile its exact grants", compileErr, candidate.Denials, len(candidate.Grants), want)
-			}
-			addresses, compileErr := compiler.ClassifyBindings(ctx, input.Bindings, history.MACs, utc)
-			if compileErr != nil {
-				t.Fatal(compileErr)
-			}
-			for _, address := range addresses {
-				if address.Is4() {
-					history.IPv4 = append(history.IPv4, address.String())
-				} else {
-					history.IPv6 = append(history.IPv6, address.String())
-				}
-			}
-			slices.Sort(history.IPv4)
-			slices.Sort(history.IPv6)
-			logicalBatch, compileErr = renderer.prepare(ctx, replacement{authorization: authorization, now: utc, cohort: history.MACs})
-			if compileErr != nil {
-				t.Fatal(compileErr)
-			}
+		}
+		slices.Sort(history.IPv4)
+		slices.Sort(history.IPv6)
+		logicalBatch, compileErr := renderer.prepare(ctx, replacement{authorization: authorization, now: utc, cohort: history.MACs})
+		if compileErr != nil {
+			t.Fatal(compileErr)
 		}
 		mapped, prepareErr := prepareMappedGuards(ctx, logicalBatch, history, nil)
 		if prepareErr != nil {
@@ -531,6 +584,36 @@ add rule inet n64_join_trace wire_post oifname "lan13" ip saddr 10.251.0.0/24 ct
 			reply.source, reply.destination = request.destination, source
 			reply.sourceMAC, reply.destinationMAC = "02:00:00:00:01:10", "02:00:00:00:00:10"
 			receivePacket(ctx, t, client, packetFrame(t, reply), true, 61)
+			if targetExpiry {
+				// Keep the caller and its source grant live while only the
+				// target's original ownership deadline expires in the kernel.
+				deadline := time.Now().Add(10 * time.Second)
+				for strings.Contains(string(kernelFixtureCommand(ctx, t, "list", "set", "inet", ownedTable, nativeSourceEpoch4)), `"elem"`) {
+					if time.Now().After(deadline) {
+						t.Fatal("target ownership did not expire at its original deadline")
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+				for _, name := range []string{nativeSourceLive6, "native_n64_from4_udp", "native_n64_from6_udp"} {
+					if !strings.Contains(string(kernelFixtureCommand(ctx, t, "list", "set", "inet", ownedTable, name)), `"elem"`) {
+						t.Fatal("target expiry also lost the independent current caller or grant", name)
+					}
+				}
+				reply.source, reply.destination = wire.destination, wire.source
+				reply.sourceMAC, reply.destinationMAC = "02:00:00:00:00:14", "02:00:00:00:01:14"
+				reply.payload = "return-after-target-ownership-expiry"
+				sendPacket(ctx, t, lan, packetFrame(t, reply))
+				rejectNATPayload(ctx, t, client, reply.payload)
+				request.sourcePort += 77
+				request.payload = "fresh-request-after-target-ownership-expiry"
+				sendPacket(ctx, t, client, packetFrame(t, request))
+				rejectNATPayload(ctx, t, lan, request.payload)
+				return
+			}
 		}
 	}
 	denied := packetDatagram{source: source, destination: netip.MustParseAddr("fdca:1a2b:e064::af0:30b"), sourceMAC: "02:00:00:00:00:10", destinationMAC: "02:00:00:00:01:10",
@@ -783,9 +866,27 @@ add rule inet n64_join_trace wire_post oifname "lan13" ip saddr 10.251.0.0/24 ct
 			reply.payload = "configuration-revoked-target-return"
 			sendPacket(ctx, t, internet, packetFrame(t, reply))
 			raw.payload = reply.payload
-			receivePacket(ctx, t, client, packetFrame(t, raw), false, 61)
+			receivePacket(ctx, t, client, packetFrame(t, raw), sourceOwned, 61)
 			if guardFixtureCounter(ctx, t, "n64_join_trace", "wire_reply_post") <= before {
 				t.Fatal("configuration revocation also removed the independent target ownership path")
+			}
+			if sourceOwned {
+				t.Run("owned-caller-return-requires-current-IPv4-sender", func(t *testing.T) {
+					names := []string{nativeSourceLive6}
+					if directory {
+						names = append(names, "native_n64_from4_udp")
+					}
+					for _, name := range names {
+						if !strings.Contains(string(kernelFixtureCommand(ctx, t, "list", "set", "inet", ownedTable, name)), `"elem"`) {
+							t.Fatal("recipient proof withdrawal lost its independent current caller or grant", name)
+						}
+					}
+					packetNft(ctx, t, "flush set inet "+ownedTable+" "+nativeSourceEpoch4+"; flush set netdev "+ownedTable+" "+nativeSourceEpoch4)
+					reply.payload = "recipient-without-current-IPv4-sender"
+					sendPacket(ctx, t, internet, packetFrame(t, reply))
+					raw.payload = reply.payload
+					receivePacket(ctx, t, client, packetFrame(t, raw), false, 61)
+				})
 			}
 		})
 	}

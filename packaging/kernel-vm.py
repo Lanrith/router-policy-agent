@@ -66,6 +66,11 @@ EXPECTED_TESTS = [
     'TestKernelNamedNAT64JoinedOwnerDirectoryPaths',
     'TestKernelNamedNAT64JoinedTargetOwner',
     'TestKernelNamedNAT64JoinedTargetDirectory',
+    'TestKernelNamedNAT64JoinedRecipientGrant',
+    'TestKernelNamedNAT64JoinedRecipientGrantWithCallerHistory',
+    'TestKernelNamedNAT64JoinedOwnedCallerAndTarget',
+    'TestKernelNamedNAT64JoinedSourceGrantToOwnedTarget',
+    'TestKernelNamedNAT64JoinedOwnedTargetExpiry',
     'TestKernelNamedCombinedTranslationLayout',
 ]
 

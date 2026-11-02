@@ -26,6 +26,7 @@ type nativeNAT64Transport struct {
 	prefix, pool    netip.Prefix
 	mappings        []policy.NAT64SourceMapping
 	sourceNetworks  map[string][]netip.Prefix
+	managedIPv4     []netip.Prefix
 	legs            []nativeNAT64Leg
 	ruleCount       int
 }
@@ -86,6 +87,13 @@ func newNativeNAT64Transport(ctx context.Context, baseline policy.Baseline, comp
 			destinations: []string{b.NetworkModel.UplinkInterface}, mappings: slices.Clone(component.SourceMappings), sourceNetworks: map[string][]netip.Prefix{}, ruleCount: len(b.NetworkModel.Rules)}
 		for _, zone := range b.Zones {
 			transport.destinations = append(transport.destinations, zone.Interfaces...)
+			if slices.Contains(b.NetworkModel.ManagedNetworks, zone.Role) {
+				for _, network := range zone.Networks {
+					if network.Addr().Is4() {
+						transport.managedIPv4 = append(transport.managedIPv4, network)
+					}
+				}
+			}
 			for _, iface := range zone.Interfaces {
 				for _, network := range zone.Networks {
 					if network.Addr().Is6() {
