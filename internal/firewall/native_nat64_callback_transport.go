@@ -63,7 +63,7 @@ func newNativeNAT64CallbackTransport(ctx context.Context, transport *nativeNAT64
 					direction = "reply"
 				}
 				callback.proof.legs = append(callback.proof.legs, nativeNAT46Leg{name: fmt.Sprintf("%s_callback_%d_%s_%s", transport.name, index, protocol, direction),
-					component: transport.component, protocol: protocol, prefix: transport.prefix, mapping: target, reply: reply})
+					component: transport.component, namespace: transport.name + "_callback", protocol: protocol, prefix: transport.prefix, mapping: target, reply: reply})
 			}
 		}
 	}

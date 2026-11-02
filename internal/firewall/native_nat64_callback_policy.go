@@ -16,6 +16,7 @@ import (
 // exact tuple correlation, mandatory guards and current listener grants on all
 // four legs and at physical egress. Default profiles do not activate this path.
 type nativeNAT64CallbackModel struct {
+	callback    *nativeNAT64CallbackTransport
 	mapped      *nativeNAT46Model
 	callerClass policy.NAT64TargetClass
 }
@@ -66,7 +67,7 @@ func newNativeNAT64CallbackModel(ctx context.Context, baseline policy.Baseline, 
 	for _, component := range owned.NAT64 {
 		class.Excluded = append(class.Excluded, *component.SourcePool)
 	}
-	model := &nativeNAT64CallbackModel{callerClass: class, mapped: &nativeNAT46Model{
+	model := &nativeNAT64CallbackModel{callback: callback, callerClass: class, mapped: &nativeNAT46Model{
 		baselineHash: transport.baselineHash, component: transport.component, namespace: transport.name + "_callback",
 		prefix: transport.prefix, rules: rules,
 	}}

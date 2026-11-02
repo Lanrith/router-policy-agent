@@ -79,6 +79,7 @@ func newNativeNAT46SharedTransport(ctx context.Context, sources *nativeNAT46Stat
 type nativeNAT46Leg struct {
 	name, protocol string
 	component      string
+	namespace      string
 	mapping        nativeNAT46Mapping
 	prefix         netip.Prefix
 	reply          bool
@@ -165,6 +166,13 @@ func (leg nativeNAT46Leg) translator() string {
 		return leg.component
 	}
 	return "nat46"
+}
+
+func (leg nativeNAT46Leg) grantNamespace() string {
+	if leg.namespace != "" {
+		return leg.namespace
+	}
+	return "native_n46"
 }
 
 func (leg nativeNAT46Leg) geometry(imported bool) nativeScope {

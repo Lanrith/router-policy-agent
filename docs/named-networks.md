@@ -332,6 +332,17 @@ private and unsupported IPv4 space; the private component accepts private IPv4
 space. All translator source pools and NAT46 alias pools are excluded as caller
 identities. Class descriptions are connectivity data and grant no access.
 
+The construction-only recipient-grant projection requires the original allocation
+ledger, live supervisor proof and IPv6 ownership receipt. It accepts only retained
+ready callback mappings and eligible native IPv4 callers. Both packet families
+retain the exact recipient alias, caller and TCP/UDP listener under the original
+ownership epoch and expiry. Its collections have a distinct component namespace;
+generic mutation cannot publish them. Deny-only cleanup needs no fresh positive
+translator or ownership proof. Eight directory cases exercise the original
+compiler, classifier and renderer before projection, including earlier owner
+denies and unsatisfied listener or identity requirements. This remains separate
+from a fully joined typed writer and packet admission.
+
 The callback policy fixture exercises TCP/UDP/echo, terminal directory decisions,
 scoped current listener grants, independent physical revocation, wrong callers
 and interfaces, packet mutations, immutable epochs and grant expiry. Its callers
