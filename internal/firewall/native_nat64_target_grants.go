@@ -12,9 +12,9 @@ import (
 )
 
 // Target grants retain the exact IPv4 device and its original IPv6 caller.
-// The compiler's reviewed source mapping supplies the wire alias; an arbitrary
+// The original validated allocation view supplies the wire alias; an arbitrary
 // address inside a translator pool cannot become that caller's identity.
-func (transport *nativeNAT64Transport) projectTargetValues(ctx context.Context, logical guardChanges, publication *nativeSourcePublication, utc, anchor time.Time) (map[string]map[string]int, error) {
+func (transport *nativeNAT64Transport) projectTargetValues(ctx context.Context, logical guardChanges, publication *nativeSourcePublication, utc, anchor time.Time, selected []policy.NAT64SourceMapping) (map[string]map[string]int, error) {
 	snapshot, err := publication.evidence.Snapshot(ctx)
 	if err != nil {
 		return nil, err
@@ -32,9 +32,11 @@ func (transport *nativeNAT64Transport) projectTargetValues(ctx context.Context, 
 		}
 	}
 	callers := map[netip.Addr]netip.Addr{}
-	for _, mapping := range transport.mappings {
+	aliases := map[netip.Addr]netip.Addr{}
+	for _, mapping := range selected {
 		if mapping.Ready {
 			callers[mapping.Alias] = mapping.Source
+			aliases[mapping.Source] = mapping.Alias
 		}
 	}
 	values := map[string]map[string]int{}
@@ -43,20 +45,32 @@ func (transport *nativeNAT64Transport) projectTargetValues(ctx context.Context, 
 			continue
 		}
 		element := command.Add.Element
-		if element.Family != "inet" || element.Table != ownedTable || element.Name != "lease_to4_tcp" && element.Name != "lease_to4_udp" {
+		ipv4 := element.Name == "lease_to4_tcp" || element.Name == "lease_to4_udp"
+		ipv6 := element.Name == "lease_to6_tcp" || element.Name == "lease_to6_udp"
+		if element.Family != "inet" || element.Table != ownedTable || !ipv4 && !ipv6 {
 			continue
 		}
 		protocol := "tcp"
-		if element.Name == "lease_to4_udp" {
+		if element.Name == "lease_to4_udp" || element.Name == "lease_to6_udp" {
 			protocol = "udp"
 		}
 		for _, raw := range element.Values {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			tuple, err := validateLeasedTuple(raw, true)
+			tuple, err := validateLeasedTuple(raw, ipv4)
 			if err != nil {
 				return nil, err
+			}
+			if ipv6 {
+				// The immutable compiler already authorized this representation.
+				// Only the original live ledger supplies its wire source alias.
+				target := nativeNAT64IPv4Prefix(transport.prefix, netip.PrefixFrom(tuple.device, 128))
+				alias, mapped := aliases[tuple.peer]
+				if !target.IsValid() || target.Bits() != 32 || !mapped {
+					continue
+				}
+				tuple.device, tuple.peer = target.Addr(), alias
 			}
 			identity := nativeSourceIP{nativeSourceIdentity: nativeSourceIdentity{iface: tuple.interfaceName, mac: tuple.mac}, address: tuple.device}
 			id, known := ids[identity]

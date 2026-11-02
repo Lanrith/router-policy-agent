@@ -60,6 +60,7 @@ func (transport *nativeNAT64Transport) projectGrants(
 	logical guardChanges,
 	publication *nativeSourcePublication,
 	utc, anchor time.Time,
+	selected []policy.NAT64SourceMapping,
 ) ([]change, error) {
 	if ctx == nil || transport == nil || transport.geometry == nil || !generationHash(transport.baselineHash) ||
 		publication == nil || utc.IsZero() || anchor.IsZero() || anchor.Before(publication.startedAt) || time.Since(anchor) < 0 {
@@ -89,8 +90,10 @@ func (transport *nativeNAT64Transport) projectGrants(
 		indexes[identity] = index
 	}
 	mappings := map[netip.Addr]policy.NAT64SourceMapping{}
-	for _, mapping := range transport.mappings {
-		mappings[mapping.Source] = mapping
+	for _, mapping := range selected {
+		if mapping.Ready {
+			mappings[mapping.Source] = mapping
+		}
 	}
 	values := map[string]map[string]int{}
 	for _, ref := range nativeNAT64GrantRefs() {
@@ -167,7 +170,7 @@ func (transport *nativeNAT64Transport) projectGrants(
 			}
 		}
 	}
-	targetValues, err := transport.projectTargetValues(ctx, logical, publication, utc, anchor)
+	targetValues, err := transport.projectTargetValues(ctx, logical, publication, utc, anchor, selected)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +208,7 @@ func expandNativeNAT64Grants(
 	publication *nativeSourcePublication,
 	transports []*nativeNAT64Transport,
 	utc, anchor time.Time,
+	origins ...*nativeNAT64GrantOrigin,
 ) ([]byte, error) {
 	if ctx == nil || len(transports) == 0 {
 		return nil, errors.New("firewall: missing NAT64 grant geometry")
@@ -221,15 +225,19 @@ func expandNativeNAT64Grants(
 	for _, ref := range nativeNAT64GrantRefs() {
 		values[ref.Name] = map[string]timedGrant{}
 	}
+	selected, err := nativeNAT64GrantMappings(ctx, transports, origins)
+	if err != nil {
+		return nil, err
+	}
 	baselineHash := transports[0].baselineHash
-	for _, transport := range transports {
+	for index, transport := range transports {
 		if transport == nil || !generationHash(transport.baselineHash) || transport.baselineHash != baselineHash {
 			return nil, errors.New("firewall: inconsistent NAT64 grant geometry")
 		}
 		if publication == nil {
 			continue
 		}
-		projected, projectErr := transport.projectGrants(ctx, changes, publication, utc, anchor)
+		projected, projectErr := transport.projectGrants(ctx, changes, publication, utc, anchor, selected[index])
 		if projectErr != nil {
 			return nil, projectErr
 		}
@@ -288,13 +296,17 @@ func prepareNativeNAT64Guards(
 	publication *nativeSourcePublication,
 	transport *nativeNAT64Transport,
 	utc time.Time,
+	origins ...*nativeNAT64GrantOrigin,
 ) (*preparedGuardBatch, error) {
-	return prepareNativeNAT64AggregateGuards(ctx, source, publication, []*nativeNAT64Transport{transport}, utc)
+	return prepareNativeNAT64AggregateGuards(ctx, source, publication, []*nativeNAT64Transport{transport}, utc, origins...)
 }
 
 func preparedNativeNAT64Transports(prepared *preparedGuardBatch) ([]*nativeNAT64Transport, error) {
 	if prepared == nil {
 		return nil, errors.New("firewall: missing NAT64 grant preparation")
+	}
+	if len(prepared.nat64GrantOrigins) != 0 && (prepared.sourcePublication == nil || prepared.nat64Transport == nil && len(prepared.nat64Transports) == 0) {
+		return nil, errors.New("firewall: NAT64 grant origins lost their source or selected model")
 	}
 	transports := slices.Clone(prepared.nat64Transports)
 	switch {
@@ -316,6 +328,7 @@ func prepareNativeNAT64AggregateGuards(
 	publication *nativeSourcePublication,
 	transports []*nativeNAT64Transport,
 	utc time.Time,
+	origins ...*nativeNAT64GrantOrigin,
 ) (*preparedGuardBatch, error) {
 	if ctx == nil || len(transports) == 0 || transports[0] == nil || !generationHash(transports[0].baselineHash) {
 		return nil, errors.New("firewall: missing NAT64 guard model")
@@ -336,7 +349,7 @@ func prepareNativeNAT64AggregateGuards(
 	if err != nil {
 		return nil, err
 	}
-	return attachNativeNAT64Grants(ctx, prepared, publication, transports)
+	return attachNativeNAT64Grants(ctx, prepared, publication, transports, origins...)
 }
 
 func attachNativeNAT64Grants(
@@ -344,9 +357,10 @@ func attachNativeNAT64Grants(
 	prepared *preparedGuardBatch,
 	publication *nativeSourcePublication,
 	transports []*nativeNAT64Transport,
+	origins ...*nativeNAT64GrantOrigin,
 ) (*preparedGuardBatch, error) {
 	if ctx == nil || prepared == nil || !prepared.native || prepared.sourcePublication != publication ||
-		prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(transports) == 0 {
+		prepared.nat64Transport != nil || len(prepared.nat64Transports) != 0 || len(prepared.nat64GrantOrigins) != 0 || len(transports) == 0 || publication == nil && len(origins) != 0 {
 		return nil, errors.New("firewall: invalid NAT64 grant attachment")
 	}
 	baselineHash := transports[0].baselineHash
@@ -358,13 +372,14 @@ func attachNativeNAT64Grants(
 	if publication != nil && prepared.sourceBaselineHash != baselineHash {
 		return nil, errors.New("firewall: NAT64 grant attachment changed source baseline")
 	}
-	data, err := expandNativeNAT64Grants(ctx, prepared.batch.data, publication, transports, prepared.sourceUTC, prepared.sourceAnchor)
+	data, err := expandNativeNAT64Grants(ctx, prepared.batch.data, publication, transports, prepared.sourceUTC, prepared.sourceAnchor, origins...)
 	if err != nil {
 		return nil, err
 	}
 	next := *prepared
 	next.batch.data = data
 	next.nat64Transports = slices.Clone(transports)
+	next.nat64GrantOrigins = slices.Clone(origins)
 	if len(transports) == 1 {
 		next.nat64Transport = transports[0]
 	}
@@ -394,10 +409,16 @@ func validateNAT64GrantDeadlines(ctx context.Context, prepared *preparedGuardBat
 	for _, inventory := range inventories {
 		slices.SortFunc(inventory, compareNativeIP)
 	}
+	selected, err := nativeNAT64GrantMappings(ctx, transports, prepared.nat64GrantOrigins)
+	if err != nil {
+		return err
+	}
 	mapped := map[netip.Addr]bool{}
-	for _, transport := range transports {
-		for _, mapping := range transport.mappings {
-			mapped[mapping.Source] = true
+	for _, mappings := range selected {
+		for _, mapping := range mappings {
+			if mapping.Ready {
+				mapped[mapping.Source] = true
+			}
 		}
 	}
 	changes, err := decodeGuardChanges(prepared.batch.data)

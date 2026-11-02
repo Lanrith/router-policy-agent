@@ -71,6 +71,12 @@ EXPECTED_TESTS = [
     'TestKernelNamedNAT64JoinedOwnedCallerAndTarget',
     'TestKernelNamedNAT64JoinedSourceGrantToOwnedTarget',
     'TestKernelNamedNAT64JoinedOwnedTargetExpiry',
+    'TestKernelNamedNAT64JoinedDynamicSourceGrant',
+    'TestKernelNamedNAT64JoinedDynamicTargetGrant',
+    'TestKernelNamedNAT64JoinedDynamicRecipientGrant',
+    'TestKernelNamedNAT64JoinedDynamicRecipientWithCallerHistory',
+    'TestKernelNamedNAT64JoinedDynamicSourceGrantToOwnedTarget',
+    'TestKernelNamedNAT64DynamicGrantPublicationFences',
     'TestKernelNamedCombinedTranslationLayout',
 ]
 

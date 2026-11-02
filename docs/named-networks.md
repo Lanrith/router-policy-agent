@@ -241,7 +241,7 @@ actual IPv4 target after translation. Raw carrier egress retains its source
 identity, floor and epoch checks while supplying connectivity to the translator.
 
 A recipient's exact listener grant can also authorize a currently owned IPv6
-caller through its configured source alias. The projection keeps the caller's
+caller through its retained or runtime-allocated source alias. The projection keeps the caller's
 IPv6 UID and ownership epoch; it cannot substitute the recipient's IPv4 UID.
 Its deadline is bounded by the original caller ownership, target ownership and
 recipient grant. Source and recipient grants both pass through the actual
@@ -263,10 +263,34 @@ permission with both endpoints owned. The caller and target deliberately have
 different address-family UIDs. Wrong attachments and MACs, expired or withdrawn
 grants, missing sender proofs and stale tuples remain closed.
 
-These fixtures use synthetic ownership and source readiness. Grants using
-dynamic source aliases and IPv4-initiated callbacks through NAT64 source aliases
-still require implementation and qualification. Actual IPv6 ownership production,
-WAN source NAT, correlated errors and complete image activation remain unqualified.
+Dynamic source-alias grants retain the original process-local allocation ledger
+and live translator supervisor proof. Preparation rechecks the exact selected
+transport and original ledger before deriving the alias. The privileged executor
+reconstructs the grant mirrors from those same dependencies and rechecks live
+readiness. The backend captures the runtime activation under its writer fence;
+commit and readback reject a replaced activation even if its allocation data
+looks identical. Missing readiness still permits deny-only revocation.
+
+For a recipient grant, the compiler already supplies the encoded IPv6 target
+and native IPv6 caller. The projection derives their actual IPv4 target and
+allocated source alias from the selected component's original ledger. It does
+not add counterparts to the compiler baseline or recompile normalized
+configuration at runtime. A ledger or an allocation alone supplies no permission.
+Retained unready mappings remain closed.
+
+Five real-TAYGA fixtures use an authorization baseline with no configured source
+aliases. They cover source grants, target grants, recipient grants with and
+without caller history, and source grants to independently owned targets. A
+separate backend fixture exercises actual guarded transactions and independent
+profile inspection, rejects queued work after activation replacement and seals
+grants after readiness loss. It uses dummy links and synthetic readiness rather
+than a translator process. Neither fixture is evidence of a live IPv6 binding
+producer or image activation.
+
+These fixtures use synthetic ownership and source readiness. IPv4-initiated
+callbacks through NAT64 source aliases still require implementation and
+qualification. Actual IPv6 ownership production, WAN source NAT, correlated
+errors and complete image activation remain unqualified.
 
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection

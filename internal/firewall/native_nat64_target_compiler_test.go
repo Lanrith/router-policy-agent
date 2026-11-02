@@ -18,7 +18,8 @@ func TestNAT64TargetGrantsRequireCompiledDirectoryPermission(t *testing.T) {
 	for _, caller := range []struct {
 		name                     string
 		lifetime, targetLifetime time.Duration
-	}{{"configured caller", 0, 90 * time.Second}, {"owned caller", 90 * time.Second, 90 * time.Second}, {"short caller ownership", 20 * time.Second, 90 * time.Second}, {"short target ownership", 90 * time.Second, 20 * time.Second}} {
+		dynamic                  bool
+	}{{"configured caller", 0, 90 * time.Second, false}, {"owned caller", 90 * time.Second, 90 * time.Second, false}, {"short caller ownership", 20 * time.Second, 90 * time.Second, false}, {"short target ownership", 90 * time.Second, 20 * time.Second, false}, {"dynamic configured caller", 0, 90 * time.Second, true}, {"dynamic owned caller", 90 * time.Second, 90 * time.Second, true}} {
 		for _, test := range []struct {
 			name                               string
 			active, access, ready, bound, deny bool
@@ -51,6 +52,10 @@ func TestNAT64TargetGrantsRequireCompiledDirectoryPermission(t *testing.T) {
 					b.NetworkModel.Rules = append([]policy.NetworkRule{block}, b.NetworkModel.Rules...)
 				}
 				b.NAT64[0].SourceMappings = []policy.NAT64SourceMapping{{Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10"), Ready: test.ready}}
+				allocations := b.NAT64[0].SourceMappings
+				if caller.dynamic {
+					b.NAT64[0].SourceMappings = nil
+				}
 				renderer, err := newRenderer(b)
 				if err != nil {
 					t.Fatal(err)
@@ -125,7 +130,26 @@ func TestNAT64TargetGrantsRequireCompiledDirectoryPermission(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				prepared, err := prepareNativeNAT64Guards(t.Context(), mapped, sources, transport, logical.preparedAt)
+				var origins []*nativeNAT64GrantOrigin
+				if caller.dynamic {
+					ledger, err := transport.geometry.Capture(t.Context(), transport.component, nil, allocations)
+					if err != nil {
+						t.Fatal(err)
+					}
+					entries, err := ledger.Snapshot(t.Context())
+					if err != nil {
+						t.Fatal(err)
+					}
+					proof := &testNAT64Readiness{transport: transport, entries: entries, ready: test.ready}
+					origins = []*nativeNAT64GrantOrigin{{transport: transport, ledger: ledger, readiness: proof}}
+				}
+				prepared, err := prepareNativeNAT64Guards(t.Context(), mapped, sources, transport, logical.preparedAt, origins...)
+				if caller.dynamic && !test.ready {
+					if err == nil {
+						t.Fatal("unready dynamic allocation projected a recipient grant")
+					}
+					return
+				}
 				if err != nil {
 					t.Fatal(err)
 				}

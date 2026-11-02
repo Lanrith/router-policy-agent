@@ -26,6 +26,7 @@ type preparedGuardBatch struct {
 	nat46Model         *nativeNAT46Model
 	nat64Transport     *nativeNAT64Transport
 	nat64Transports    []*nativeNAT64Transport
+	nat64GrantOrigins  []*nativeNAT64GrantOrigin
 }
 
 type guardChanges struct {

@@ -74,9 +74,31 @@ func TestKernelNamedNAT64JoinedOwnedCallerAndTarget(t *testing.T) {
 	testKernelNamedNAT64JoinedTAYGA(t, "paired_owner", true, true)
 }
 
+func TestKernelNamedNAT64JoinedDynamicSourceGrant(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "dynamic_directory", false, false)
+}
+
+func TestKernelNamedNAT64JoinedDynamicTargetGrant(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "dynamic_target_directory", true, true)
+}
+
+func TestKernelNamedNAT64JoinedDynamicRecipientGrant(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "dynamic_recipient", true, true)
+}
+
+func TestKernelNamedNAT64JoinedDynamicRecipientWithCallerHistory(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "dynamic_recipient_cohort", true, true)
+}
+
+func TestKernelNamedNAT64JoinedDynamicSourceGrantToOwnedTarget(t *testing.T) {
+	testKernelNamedNAT64JoinedTAYGA(t, "dynamic_paired_directory", true, true)
+}
+
 func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalInterface, separateRules bool) {
 	requireKernelIsolation(t)
 	t.Cleanup(func() { requireKernelIsolation(t) })
+	dynamic := strings.HasPrefix(authorization, "dynamic_")
+	authorization = strings.TrimPrefix(authorization, "dynamic_")
 	recipient := authorization == "recipient" || authorization == "recipient_cohort"
 	pairedOwner := authorization == "paired_owner"
 	targetExpiry := authorization == "paired_directory_expiry"
@@ -117,6 +139,22 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		portBase = 28000
 	case "paired_directory_expiry":
 		portBase = 26000
+	}
+	if dynamic {
+		switch authorization {
+		case "directory":
+			portBase = 24000
+		case "target_directory":
+			portBase = 22000
+		case "recipient":
+			portBase = 20000
+		case "recipient_cohort":
+			portBase = 18000
+		case "paired_directory":
+			portBase = 16000
+		default:
+			t.Fatal("unsupported dynamic grant fixture", authorization)
+		}
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
@@ -188,6 +226,10 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		ID: "nat64-internal", Prefix: netip.MustParsePrefix("fdca:1a2b:e064::/96"), Scope: "private", SourcePool: &pool,
 		SourceMappings: []policy.NAT64SourceMapping{{Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10"), Ready: true}},
 	}}
+	allocatedMappings := b.NAT64[0].SourceMappings
+	if dynamic {
+		b.NAT64[0].SourceMappings = nil
+	}
 	allowAuthorization := "owner"
 	if directory {
 		allowAuthorization = "directory"
@@ -253,7 +295,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 	})
 
 	transport := layout.native.nat64Transport
-	ledger, err := transport.geometry.Capture(ctx, transport.component, nil, b.NAT64[0].SourceMappings)
+	ledger, err := transport.geometry.Capture(ctx, transport.component, nil, allocatedMappings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +303,20 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 	if err != nil {
 		t.Fatal(err)
 	}
-	readiness := startNAT64IdentityTranslator(ctx, t, b.NAT64[0], transport, entries)
+	translatorComponent := b.NAT64[0]
+	if dynamic {
+		// Runtime allocation supplies native translator mappings; the immutable
+		// authorization baseline above deliberately contains none of them.
+		translatorComponent.SourceMappings = allocatedMappings
+	}
+	readiness := startNAT64IdentityTranslator(ctx, t, translatorComponent, transport, entries)
+	var grantOrigins []*nativeNAT64GrantOrigin
+	if dynamic {
+		if len(transport.mappings) != 0 {
+			t.Fatal("dynamic fixture retained configured source aliases")
+		}
+		grantOrigins = []*nativeNAT64GrantOrigin{{transport: transport, ledger: ledger, readiness: readiness}}
+	}
 	allocations, err := prepareNativeNAT64Allocations(ctx, transport, ledger, readiness)
 	if err != nil {
 		t.Fatal(err)
@@ -436,7 +491,7 @@ func testKernelNamedNAT64JoinedTAYGA(t *testing.T, authorization string, finalIn
 		if prepareErr != nil {
 			t.Fatal(prepareErr)
 		}
-		guarded, prepareErr := prepareNativeNAT64Guards(ctx, mapped, sources, transport, utc)
+		guarded, prepareErr := prepareNativeNAT64Guards(ctx, mapped, sources, transport, utc, grantOrigins...)
 		if prepareErr != nil {
 			t.Fatal(prepareErr)
 		}

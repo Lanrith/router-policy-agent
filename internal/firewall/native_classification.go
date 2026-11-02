@@ -171,7 +171,7 @@ func validateNativeGuardBatch(ctx context.Context, prepared *preparedGuardBatch)
 		return err
 	}
 	if len(transports) != 0 {
-		expected, err = expandNativeNAT64Grants(ctx, expected, prepared.sourcePublication, transports, prepared.sourceUTC, prepared.sourceAnchor)
+		expected, err = expandNativeNAT64Grants(ctx, expected, prepared.sourcePublication, transports, prepared.sourceUTC, prepared.sourceAnchor, prepared.nat64GrantOrigins...)
 		if err != nil {
 			return err
 		}

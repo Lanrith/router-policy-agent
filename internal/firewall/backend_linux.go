@@ -131,6 +131,9 @@ func (b *guardedBackend) commitApplication(ctx context.Context, prepared *prepar
 	}
 	var post []byte
 	err := b.options.generation.with(ctx, b.options.expected, func(bounded context.Context) error {
+		if err := b.checkNAT64GrantOrigins(prepared); err != nil {
+			return err
+		}
 		if b.nativeOwnership != publication || b.pendingNativeOwnership != nil {
 			return errors.New("firewall: source publication changed during grant preparation")
 		}
@@ -144,6 +147,9 @@ func (b *guardedBackend) commitApplication(ctx context.Context, prepared *prepar
 	// snapshot. No success is returned until independent inspection passes.
 	// This adds no lease time and never substitutes a newer source receipt.
 	err = b.options.generation.with(ctx, b.options.expected, func(bounded context.Context) error {
+		if err := b.checkNAT64GrantOrigins(prepared); err != nil {
+			return err
+		}
 		if b.nativeOwnership != publication || b.pendingNativeOwnership != nil {
 			return errors.New("firewall: source publication changed before grant verification")
 		}
@@ -207,6 +213,7 @@ func (b *guardedBackend) prepareApplication(
 	options := b.options
 	var observation *rulesetObservation
 	var publication *nativeSourcePublication
+	var grantOrigins []*nativeNAT64GrantOrigin
 	if err := options.generation.with(ctx, options.expected, func(bounded context.Context) error {
 		p := options.executor
 		if err := p.acquire(bounded); err != nil {
@@ -219,6 +226,9 @@ func (b *guardedBackend) prepareApplication(
 		var err error
 		observation, err = p.observeProfile(bounded, options.profile)
 		publication = b.nativeOwnership
+		if err == nil {
+			grantOrigins, err = b.nativeNAT64GrantOrigins()
+		}
 		return err
 	}); err != nil {
 		return nil, nil, fmt.Errorf("firewall: inspect preparation baseline: %w", err)
@@ -247,11 +257,11 @@ func (b *guardedBackend) prepareApplication(
 			prepared, err = prepareNativeNAT46Guards(ctx, mapped, publication, sources.model, logical.preparedAt)
 			if err == nil {
 				if transports := options.profile.layout.native.selectedNAT64Transports(); len(transports) != 0 {
-					prepared, err = attachNativeNAT64Grants(ctx, prepared, publication, transports)
+					prepared, err = attachNativeNAT64Grants(ctx, prepared, publication, transports, grantOrigins...)
 				}
 			}
 		} else if transports := options.profile.layout.native.selectedNAT64Transports(); len(transports) != 0 {
-			prepared, err = prepareNativeNAT64AggregateGuards(ctx, mapped, publication, transports, logical.preparedAt)
+			prepared, err = prepareNativeNAT64AggregateGuards(ctx, mapped, publication, transports, logical.preparedAt, grantOrigins...)
 		} else {
 			prepared, err = prepareNativeGuardsWithSource(ctx, mapped, publication, source.BaselineHash, logical.preparedAt)
 		}

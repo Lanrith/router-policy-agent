@@ -22,7 +22,7 @@ type nat64TokenPlanFixture struct {
 	sources       *nativeSourcePublication
 }
 
-func newNAT64TokenPlanFixture(t *testing.T, withSources bool) nat64TokenPlanFixture {
+func newNAT64TokenPlanFixture(t *testing.T, withSources bool, dynamic ...bool) nat64TokenPlanFixture {
 	t.Helper()
 	b := nat64TransportFixture(t)
 	b.NetworkModel.Rules = []policy.NetworkRule{{
@@ -31,11 +31,15 @@ func newNAT64TokenPlanFixture(t *testing.T, withSources bool) nat64TokenPlanFixt
 		To:   []policy.NetworkSelector{{Interface: "nat64-internal", Addresses: []netip.Prefix{b.NAT64[0].Prefix}}},
 	}}
 	b.NAT64[0].SourceMappings = []policy.NAT64SourceMapping{{Source: netip.MustParseAddr("fdca:1a2b::10"), Alias: netip.MustParseAddr("10.251.0.10"), Ready: true}}
+	allocations := b.NAT64[0].SourceMappings
+	if len(dynamic) == 1 && dynamic[0] {
+		b.NAT64[0].SourceMappings = nil
+	}
 	transport, err := newNativeNAT64Transport(t.Context(), b, "nat64-internal")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledger, err := transport.geometry.Capture(t.Context(), transport.component, nil, b.NAT64[0].SourceMappings)
+	ledger, err := transport.geometry.Capture(t.Context(), transport.component, nil, allocations)
 	if err != nil {
 		t.Fatal(err)
 	}

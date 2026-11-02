@@ -13,7 +13,7 @@ spec.loader.exec_module(runner)
 class QualificationTests(unittest.TestCase):
     def test_default_batches_retain_the_whole_previous_suite_and_new_owner(self):
         batches = runner.vm_batches(runner.EXPECTED_TESTS)
-        self.assertEqual([14, 5, 10, 30], [len(batch) for batch in batches])
+        self.assertEqual([14, 5, 10, 36], [len(batch) for batch in batches])
         executed = [name for batch in batches for name in batch]
         self.assertEqual(runner.EXPECTED_TESTS, executed)
         self.assertEqual(len(executed), len(set(executed)))
@@ -50,6 +50,12 @@ class QualificationTests(unittest.TestCase):
                           'TestKernelNamedNAT64JoinedOwnedCallerAndTarget',
                           'TestKernelNamedNAT64JoinedSourceGrantToOwnedTarget',
                           'TestKernelNamedNAT64JoinedOwnedTargetExpiry',
+                          'TestKernelNamedNAT64JoinedDynamicSourceGrant',
+                          'TestKernelNamedNAT64JoinedDynamicTargetGrant',
+                          'TestKernelNamedNAT64JoinedDynamicRecipientGrant',
+                          'TestKernelNamedNAT64JoinedDynamicRecipientWithCallerHistory',
+                          'TestKernelNamedNAT64JoinedDynamicSourceGrantToOwnedTarget',
+                          'TestKernelNamedNAT64DynamicGrantPublicationFences',
                           'TestKernelNamedCombinedTranslationLayout'], batches[-1])
 
     def test_selected_fixtures_do_not_expand_into_an_unrequested_suite(self):
