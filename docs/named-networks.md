@@ -309,14 +309,33 @@ allocation withdrawal and recovery. The VM runner retains the complete fixture
 order and splits it into groups of at most three. It independently checks an
 empty ruleset and no extra interfaces after each batch. Its 360-second VM cap and individual fixture
 time limits are unchanged.
-These fixtures use synthetic caller grants
-and conversion frames; they do not qualify callback ordered-policy compilation,
-actual TAYGA conversion or live authorities.
+These tuple fixtures use synthetic caller grants and conversion frames; they do
+not qualify actual callback TAYGA conversion or live authorities.
 
-Default profiles still deny new callbacks. Complete callback policy/grant and
-physical-path integration remains required, including the component's IPv4
-source-class restrictions. Actual IPv6 ownership production, WAN source NAT,
-correlated errors and complete image activation also remain unqualified.
+A separate callback policy model compiles the original immutable owner rules
+under the selected NAT64 component. It retains rule indices, paired interface,
+MAC and address alternatives, protocols, ports and first-match authorization.
+Earlier denies and directory requirements terminate the connection instead of
+falling through to a later owner permit. The generated policy and grant leaf
+names are distinct from ordinary NAT46.
+
+The policy compiler supplies the component's IPv4 address class. Callback wire
+and physical policies check the embedded IPv4 caller against that class in both
+directions, including under a broad owner rule. The public prefix excludes
+private and unsupported IPv4 space; the private component accepts private IPv4
+space. All translator source pools and NAT46 alias pools are excluded as caller
+identities. Class descriptions are connectivity data and grant no access.
+
+The callback policy fixture exercises TCP/UDP/echo, terminal directory decisions,
+scoped current listener grants, independent physical revocation, wrong callers
+and interfaces, packet mutations, immutable epochs and grant expiry. Its callers
+and connection metadata remain synthetic. It runs separately from callback
+tuple correlation and supplies no evidence of complete four-leg admission.
+
+Default profiles still deny new callbacks. Complete callback grant, source and
+target ownership, tuple and physical-path integration remains required. Actual
+IPv6 ownership production, WAN source NAT, correlated errors and complete image
+activation also remain unqualified.
 
 Both epoch transactions also publish a fixed mark-to-classid conversion map
 and a mirrored netdev epoch set. The conversion key is the admitted connection

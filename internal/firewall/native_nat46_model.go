@@ -17,11 +17,12 @@ type nativeNAT46Mapping struct {
 // This is immutable projection geometry. It does not install a translator,
 // publish a tuple proof, supply a grant or activate the default helper.
 type nativeNAT46Model struct {
-	baselineHash string
-	prefix       netip.Prefix
-	rules        *nativeRuleSet
-	mappings     []nativeNAT46Mapping
-	managed      []string
+	baselineHash         string
+	component, namespace string
+	prefix               netip.Prefix
+	rules                *nativeRuleSet
+	mappings             []nativeNAT46Mapping
+	managed              []string
 }
 
 func newNativeNAT46Model(ctx context.Context, baseline policy.Baseline) (*nativeNAT46Model, error) {
@@ -66,6 +67,27 @@ func newNativeNAT46Model(ctx context.Context, baseline policy.Baseline) (*native
 		}
 		model.mappings = append(model.mappings, nativeNAT46Mapping{id: mapping.ID, alias: mapping.Alias, target: mapping.Target, targetInterface: iface})
 	}
+	if err := model.projectAliases(ctx); err != nil {
+		return nil, err
+	}
+	return model, ctx.Err()
+}
+
+func (model *nativeNAT46Model) translator() string {
+	if model.component != "" {
+		return model.component
+	}
+	return "nat46"
+}
+
+func (model *nativeNAT46Model) policyNamespace() string {
+	if model.namespace != "" {
+		return model.namespace
+	}
+	return "native_n46"
+}
+
+func (model *nativeNAT46Model) projectAliases(ctx context.Context) error {
 	projected := 0
 	for index, rule := range model.rules.rules {
 		if rule.Family == 6 || rule.Protocol == "icmpv6" || !nativeNAT46HasIPv4Source(rule) {
@@ -73,23 +95,23 @@ func newNativeNAT46Model(ctx context.Context, baseline policy.Baseline) (*native
 		}
 		for _, mapping := range model.mappings {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
-			if !nativeNAT46Destination(rule.To, mapping, false) || nativeNAT46Destination(rule.To, mapping, true) {
+			if !nativeMappedDestination(rule.To, mapping, model.translator(), false) || nativeMappedDestination(rule.To, mapping, model.translator(), true) {
 				continue
 			}
-			alias := policy.NetworkSelector{Interface: "nat46", Addresses: []netip.Prefix{netip.PrefixFrom(mapping.alias, 32)}}
+			alias := policy.NetworkSelector{Interface: model.translator(), Addresses: []netip.Prefix{netip.PrefixFrom(mapping.alias, 32)}}
 			branch := rule
 			branch.Family, branch.To = 4, []policy.NetworkSelector{alias}
 			count, err := nativeScopeCount(branch)
 			if err != nil || count > nativeRuleCapacity-projected {
-				return nil, errors.New("firewall: nat46 projection exceeds capacity")
+				return errors.New("firewall: mapped projection exceeds capacity")
 			}
 			projected += count
 			model.rules.rules[index].To = append(model.rules.rules[index].To, alias)
 		}
 	}
-	return model, ctx.Err()
+	return ctx.Err()
 }
 
 func nativeNAT46HasIPv4Source(rule policy.NetworkRule) bool {
@@ -102,12 +124,16 @@ func nativeNAT46HasIPv4Source(rule policy.NetworkRule) bool {
 }
 
 func nativeNAT46Destination(selectors []policy.NetworkSelector, mapping nativeNAT46Mapping, rawOnly bool) bool {
+	return nativeMappedDestination(selectors, mapping, "nat46", rawOnly)
+}
+
+func nativeMappedDestination(selectors []policy.NetworkSelector, mapping nativeNAT46Mapping, component string, rawOnly bool) bool {
 	for _, endpoint := range selectors {
 		for _, variant := range []struct {
 			address netip.Addr
 			iface   string
-		}{{mapping.alias, "nat46"}, {mapping.target, mapping.targetInterface}} {
-			if rawOnly && variant.iface != "nat46" || endpoint.Interface != "" && endpoint.Interface != variant.iface {
+		}{{mapping.alias, component}, {mapping.target, mapping.targetInterface}} {
+			if rawOnly && variant.iface != component || endpoint.Interface != "" && endpoint.Interface != variant.iface {
 				continue
 			}
 			if len(endpoint.Addresses) == 0 {

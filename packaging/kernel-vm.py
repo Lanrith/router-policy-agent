@@ -78,6 +78,7 @@ EXPECTED_TESTS = [
     'TestKernelNamedNAT64JoinedDynamicSourceGrantToOwnedTarget',
     'TestKernelNamedNAT64DynamicGrantPublicationFences',
     'TestKernelNamedNAT64CallbackTupleTransport',
+    'TestKernelNamedNAT64CallbackOrderedWirePolicy',
     'TestKernelNamedCombinedTranslationLayout',
 ]
 
