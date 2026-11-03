@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "kind": "reviewed-advisory-applicability-maintenance-source-deployment",
+  "created_at": "2026-11-03T18:16:39.998260+00:00",
+  "repository": "Lanrith/router-policy-agent",
+  "base_commit": "da6343248d32c578b662b129d4dd2393d655a089",
+  "reason": "Actual normal updater41593545042 stopped on GO-2026-5932 because the deployed old resolver rejected an inventory advisory with no permitted stable module fix before checking whether its affected OpenPGP packages are imported. Deploy the independently reviewed and verified v0.1.18 resolver; retain mandatory source scanning and conservative blocking for affected or unknown imports.",
+  "incident": "https://github.com/Lanrith/router-policy-agent/issues/14",
+  "failed_run": "https://github.com/Lanrith/router-policy-agent/actions/runs/41593545042",
+  "original_signed_evidence": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-proposal-41593545042-1",
+  "platform": {
+    "actual_human_review_id": 5750835295,
+    "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-41647685219-1",
+    "repository": "Lanrith/lanrith",
+    "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261103T170242Z-1cb637fc6b6c",
+    "schema": 1,
+    "source_commit": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9",
+    "verification_record_sha256": "7ed4cdc2a6032903ec6bd9809ed277cc9cdf8ff977378fed547df7f4652f9477",
+    "version": "v0.1.18"
+  },
+  "references": [
+    {
+      "path": ".github/workflows/build-release.yml",
+      "count": 2,
+      "before": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "after": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9"
+    },
+    {
+      "path": ".github/workflows/update-inputs.yml",
+      "count": 1,
+      "before": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "after": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9"
+    },
+    {
+      "path": ".github/workflows/security-review.yml",
+      "count": 1,
+      "before": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "after": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9"
+    },
+    {
+      "path": ".github/workflows/cleanup-artifacts.yml",
+      "count": 1,
+      "before": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "after": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9"
+    },
+    {
+      "path": ".github/workflows/request-human-review.yml",
+      "count": 1,
+      "before": "90b88b65950375f75d331d67dd21da4f2a108018",
+      "after": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9"
+    }
+  ],
+  "application_dependency_changes": false,
+  "ci_contract": "The existing standard Go CI contract binds every shared caller and collector to the reviewed manifest. The new contract rejects a coherent rollback below the verified v0.1.18 applicability fix; numeric stable-version edge cases are tested.",
+  "local_validation": {
+    "old_source_regression": "Actual pinned Go1.26.10 test fails on deployed v0.1.12 before source update.",
+    "updated_contract": "Actual pinned Go1.26.10 race/shuffle maintenance contract passes.",
+    "current_compiler": "Go1.27.3 digest-pinned image; formatting, vet and full race/shuffle integration tests pass.",
+    "golangci_lint": "Exact configured v2.14.0; zero issues.",
+    "govulncheck": "Exact configured v1.9.0; live source scan passes.",
+    "actual_advisory_replay": "Released helper and frozen original GO-2026-5932 advisory; actual bounded test-inclusive import graph proves every affected OpenPGP package absent.",
+    "workflow_contracts": "Six source-reference substitutions only; supplied/required reusable inputs and caller/callee permissions checked; actionlint and whitespace pass.",
+    "evidence_sha256": {
+      "router-advisory-source-before.log": "e286fb555de68226f77b157ceda5fc07341efbed815a499f952afa6676b06dc1",
+      "router-advisory-source-after.log": "49c8a0b3541581235053a8ee92c25fe35ea151e35a375bacc605c9df48c01288",
+      "router-advisory-full-go-validation.log": "78a115ca95104cdda93522dfd146c6e75bc6406c62c2e062741e142dc3d768b8",
+      "router-advisory-pinned-lint-and-security.log": "0d52aaca3e795155d5ab5bb0472f5b1c46a58389221674ba2437a28aa2216bbe",
+      "router-advisory-released-helper-replay.json": "ac416010eb6c60f0971ea722c0b66fda6c14e3c4f2e77f5a8d126fc43b5bd241",
+      "router-advisory-applicability-preparation.json": "76fd80739f58e847a32fa2216c14f946b4a7d9bc32dd00c5a77a33afe16255a3"
+    }
+  },
+  "approval": "Fresh actual independent human review of the final head, requested only after every required hosted build passes. Workflow trust changes cannot receive automatic source approval.",
+  "deployment_status": "Prepared source only. Hosted CI, actual independent human approval, protected merge, verified immutable component release and normal deployed resolver recovery remain required. Router issue14 stays open.",
+  "paid_ai": false,
+  "protection_bypass": false
+}
