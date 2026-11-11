@@ -32,8 +32,8 @@ func TestNativeBindingPublisherInvalidatesAndLoadsWithoutShadow(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := publishBindings(t.Context(), root, options, func(context.Context) (Collection, error) {
-				if _, err := binding.Load(t.Context(), directory); err == nil {
-					t.Fatal("last complete export remained available during source reads")
+				if _, err := binding.Load(t.Context(), directory); !errors.Is(err, binding.ErrIncomplete) {
+					t.Fatal("source collection must publish the loader's explicit deny-only boundary", err)
 				}
 				if test.fail {
 					return Collection{}, errors.New("synthetic source failure")
@@ -45,8 +45,8 @@ func TestNativeBindingPublisherInvalidatesAndLoadsWithoutShadow(t *testing.T) {
 			}
 			snapshot, err := binding.Load(t.Context(), directory)
 			if test.fail {
-				if err == nil {
-					t.Fatal("source failure retained an accepted export")
+				if !errors.Is(err, binding.ErrIncomplete) {
+					t.Fatal("source failure must retain an explicit incomplete export", err)
 				}
 			} else if err != nil || len(snapshot.Records) != 1 || snapshot.Records[0].Addresses[0] != collected.ProposedBindings[0].Addresses[0] {
 				t.Fatal("native binding feed did not load with original evidence")

@@ -47,6 +47,47 @@ func NewServer(options ServerOptions, process ProcessFunc) (*Server, error) {
 	return &Server{options: options, process: process}, nil
 }
 
+// CheckListener validates supervisor-owned listener metadata without accepting
+// a client, changing the socket, or taking ownership. A helper can therefore
+// reject unsafe endpoints before announcing readiness or starting consumers.
+func (s *Server) CheckListener(ctx context.Context, listener *net.UnixListener) error {
+	if ctx == nil || s == nil || listener == nil || s.options.Timeout <= 0 {
+		return errors.New("ipc: invalid server or listener")
+	}
+	operations := 0
+	if s.process != nil {
+		operations++
+	}
+	if s.report != nil {
+		operations++
+	}
+	if s.observations != nil {
+		operations++
+	}
+	if operations != 1 {
+		return errors.New("ipc: server requires exactly one operation")
+	}
+	raw, err := listener.SyscallConn()
+	if err != nil {
+		return err
+	}
+	stream := false
+	if err := raw.Control(func(fd uintptr) {
+		if fd > math.MaxInt {
+			return
+		}
+		kind, err := syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_TYPE)
+		stream = err == nil && kind == syscall.SOCK_STREAM
+	}); err != nil || !stream {
+		return errors.New("ipc: live stream listener required")
+	}
+	uid, err := currentUID()
+	if err != nil {
+		return err
+	}
+	return checkSocket(ctx, listener.Addr().String(), uid)
+}
+
 // Serve takes ownership of an already created Unix stream listener. A systemd
 // socket unit should create its protected path and group before the capability-
 // restricted helper starts. Existing paths are never removed or replaced here.

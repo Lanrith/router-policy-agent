@@ -123,16 +123,14 @@ func (compiler *Compiler) CompileOwnership(
 			if len(result.Addresses) >= compiler.baseline.MaximumTuples {
 				return Ownership{}, errors.New("policy: ownership tuple capacity exceeded")
 			}
-			episode, err := json.Marshal([]any{record.MAC, record.NAS, record.Interface, record.VLAN,
-				address.IP, record.AssociationID, address.OwnershipID})
+			reference, err := ownershipBindingReference(record, address)
 			if err != nil {
 				return Ownership{}, errors.New("policy: ownership episode encoding failed")
 			}
-			sum := sha256.Sum256(episode)
 			result.Addresses = append(result.Addresses, OwnedAddress{
 				MAC: mac, Interface: record.Interface, VLAN: record.VLAN, Address: address.IP,
 				ExpiresAt: earliest(snapshot.ObservedAt.Add(lease), record.AssociatedAt.Add(lease),
-					address.ObservedAt.Add(lease), address.ValidUntil), BindingRef: hex.EncodeToString(sum[:]),
+					address.ObservedAt.Add(lease), address.ValidUntil), BindingRef: reference,
 			})
 		}
 	}
@@ -159,6 +157,18 @@ func (compiler *Compiler) CompileOwnership(
 		return Ownership{}, err
 	}
 	return Ownership{data: &ownership{snapshot: result, anchor: anchor.tick}}, nil
+}
+
+// One episode identifier for both physical evidence and authorization. Refresh
+// timestamps do not change an owner; NAS/association/address ownership does.
+func ownershipBindingReference(record binding.Record, address binding.Address) (string, error) {
+	episode, err := json.Marshal([]any{record.MAC, record.NAS, record.Interface, record.VLAN,
+		address.IP, record.AssociationID, address.OwnershipID})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(episode)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // Snapshot returns a defensive copy without renewing any deadline.

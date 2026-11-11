@@ -120,16 +120,3 @@ func nat46StaticSourceLive() nativeScope {
 	key := map[string]any{"concat": []any{guardBinary("&", guardMeta("priority"), "ffff:fc00"), guardBinary("&", guardMeta("priority"), "0:3ff")}}
 	return nativeMatch("(meta priority & 0xfffffc00) . (meta priority & 0x3ff) @"+nativeNAT46StaticSourceLive, key, "@"+nativeNAT46StaticSourceLive)
 }
-
-func nat46StaticSourceWirePhysical(reply bool) []nativeScope {
-	if !reply {
-		return nat46StaticSourcePhysical(false)
-	}
-	_, epoch := epochChannelNames(false)
-	key := map[string]any{"concat": []any{guardBinary("&", guardMeta("mark"), nativeSourceMask), guardBinary("&", guardMeta("priority"), "0:3ff"), guardPayload("ip6", "daddr")}}
-	rules := []nativeScope{nativeJoin(nativeMatch("ip6 daddr @"+classified6Set, guardPayload("ip6", "daddr"), "@"+classified6Set), nativeVerdict("drop", ""))}
-	for _, directory := range []bool{false, true} {
-		rules = append(rules, nativeJoin(nativeMark(0xff000000, nativeNAT46StaticSourceTag(directory, true)), nativePriorityEpoch(epoch), nat46StaticSourceLive(), nativeMatch("(meta mark & 0xe000) . (meta priority & 0x3ff) . ip6 daddr @"+nativeNAT46StaticBindings6, key, "@"+nativeNAT46StaticBindings6), nativeVerdict("return", "")))
-	}
-	return append(rules, nativeVerdict("drop", ""))
-}

@@ -43,6 +43,7 @@ type nativeNAT64Supervisor interface {
 // inert; no current executable installs or enables it. Production qualification
 // of bindings, boot ordering, release pins, time and packet paths is still required.
 type guardedService struct {
+	tun       bool
 	engine    *agent.Engine
 	server    *ipc.Server
 	backend   *guardedBackend
@@ -123,6 +124,7 @@ type serviceListeners struct {
 	requests *net.UnixListener
 	status   *net.UnixListener
 	operator *ipc.Server
+	ready    func(context.Context) error
 }
 
 // serveListeners admits the optional status listener only as a complete,
@@ -162,8 +164,26 @@ func (s *guardedService) serveListeners(ctx context.Context, listeners serviceLi
 			}
 		}
 	}()
+	if err := s.server.CheckListener(ctx, listeners.requests); err != nil {
+		return err
+	}
+	if listeners.status != nil {
+		if err := listeners.operator.CheckListener(ctx, listeners.status); err != nil {
+			return err
+		}
+	}
 	if err := s.engine.Start(ctx); err != nil {
 		return fmt.Errorf("firewall: start helper service: %w", err)
+	}
+	if s.tun {
+		if err := s.engine.InitializeBindings(ctx); err != nil {
+			return fmt.Errorf("firewall: initialize qualified bindings: %w", err)
+		}
+	}
+	if listeners.ready != nil {
+		if err := listeners.ready(ctx); err != nil {
+			return fmt.Errorf("firewall: publish helper readiness: %w", err)
+		}
 	}
 	servers := func(ctx context.Context) error {
 		if listeners.status == nil {
@@ -174,24 +194,32 @@ func (s *guardedService) serveListeners(ctx context.Context, listeners serviceLi
 			func(ctx context.Context) error { return listeners.operator.Serve(ctx, listeners.status) },
 		)
 	}
-	if s.backend.options.profile.layout.ownership {
+	if s.tun || s.backend.options.profile.layout.ownership {
 		return serveHelperPair(ctx, servers, s.superviseOwnership)
 	}
 	return servers(ctx)
 }
 
 func (s *guardedService) superviseOwnership(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
-		if err := s.engine.RefreshBindings(ctx); err != nil {
-			return err
-		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
 		}
+		err := s.engine.RefreshBindings(ctx)
+		delay := 10 * time.Second
+		if errors.Is(err, agent.ErrBindingsPending) {
+			// RefreshBindings already clears ownership and application permits
+			// while retaining deny-only history. A producer's explicit negative
+			// interval need not restart the helper or refresh any grant lifetime.
+			delay = 250 * time.Millisecond
+		} else if err != nil {
+			return err
+		}
+		timer.Reset(delay)
 	}
 }
 

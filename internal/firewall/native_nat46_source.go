@@ -62,37 +62,6 @@ func (leg nativeNAT46Leg) targetPhysical() []nativeScope {
 	return append(checks, nativeVerdict("drop", ""))
 }
 
-// sourcePhysical binds a managed original IPv4 client to the actual packet at
-// physical egress. Neither a live UID by itself nor an earlier inet check can
-// substitute for the exact current address. Its deadline is the original
-// ownership deadline, mirrored by the typed publisher in both families.
-//
-// This is an identity predicate only. The caller must separately enforce the
-// current ordered scope, grants, original attachment and mapped listener. In
-// particular, it must never substitute this NAS namespace for static geometry.
-func (leg nativeNAT46Leg) sourcePhysical() []nativeScope {
-	_, epoch := epochChannelNames(false)
-	// Typed IP address predicates already constrain the network family.
-	// nft omits a redundant Ethernet-type predicate from its canonical graph.
-	geometry := nativeJoin(
-		nativeMatch(fmt.Sprintf("oifname %q", leg.mapping.targetInterface), guardMeta("oifname"), leg.mapping.targetInterface),
-		nativeMatch("ip6 daddr "+leg.mapping.target.String(), guardPayload("ip6", "daddr"), leg.mapping.target.String()),
-		nativeMatch("ip6 saddr "+leg.prefix.String(), guardPayload("ip6", "saddr"), controllerPrefix(leg.prefix)))
-	key := map[string]any{"concat": []any{guardBinary("&", guardMeta("mark"), nativeSourceMask), guardBinary("&", guardMeta("priority"), "0:3ff"), nativeRawPayload(160)}}
-	proof := nativeMatch("(meta mark & 0xe000) . (meta priority & 0x3ff) . @nh,160,32 @"+nativeSourceBits4, key, "@"+nativeSourceBits4)
-	if leg.reply {
-		geometry = nativeMatch("ip saddr "+leg.mapping.alias.String(), guardPayload("ip", "saddr"), leg.mapping.alias.String())
-		key = map[string]any{"concat": []any{guardBinary("&", guardMeta("mark"), nativeSourceMask), guardBinary("&", guardMeta("priority"), "0:3ff"), guardPayload("ip", "daddr")}}
-		proof = nativeMatch("(meta mark & 0xe000) . (meta priority & 0x3ff) . ip daddr @"+nativeSource4, key, "@"+nativeSource4)
-	}
-	checks := nativeJoin(geometry, nativePriorityEpoch(epoch), proof)
-	return []nativeScope{
-		nativeJoin(nativeMark(0xff000000, nativeTag(false, leg.reply)), checks, nativeVerdict("return", "")),
-		nativeJoin(nativeMark(0xff000000, nativeDirectoryTag(leg.reply)), checks, nativeVerdict("return", "")),
-		nativeVerdict("drop", ""),
-	}
-}
-
 // A native reply still exposes the mapped device's IPv6 source before TAYGA.
 // Its input MAC must be checked before routing replaces the Ethernet header;
 // this physical predicate repeats the exact native address/epoch liveness.

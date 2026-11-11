@@ -55,13 +55,16 @@ func decodeSnapshot(data []byte) (Snapshot, error) {
 		return Snapshot{}, errors.New("binding: invalid export")
 	}
 	if snapshot.SchemaVersion != 1 || snapshot.Generation == "" || len(snapshot.Generation) > 128 ||
-		!snapshot.Complete || snapshot.ObservedAt.IsZero() || len(snapshot.Records) > 4096 {
+		snapshot.ObservedAt.IsZero() || len(snapshot.Records) > 4096 {
 		return Snapshot{}, errors.New("binding: incomplete or oversized export")
 	}
 	for _, record := range snapshot.Records {
 		if len(record.Addresses) > 16 {
 			return Snapshot{}, errors.New("binding: oversized address export")
 		}
+	}
+	if !snapshot.Complete {
+		return Snapshot{}, ErrIncomplete
 	}
 	return snapshot, nil
 }

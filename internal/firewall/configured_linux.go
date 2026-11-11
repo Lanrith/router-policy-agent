@@ -69,6 +69,9 @@ func runConfiguredWithClock(
 	if options.observations != nil && !configuredListenerMatches(options.observations, config.ObservationsSocket) {
 		return errors.New("firewall: incorrect observations listener")
 	}
+	if config.Backend == "tun" {
+		return runTUNService(ctx, options, config, clock)
+	}
 	resources, err := openConfiguredWithClock(
 		ctx,
 		config,

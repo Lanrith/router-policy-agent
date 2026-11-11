@@ -25,6 +25,8 @@ const (
 	Enforce Mode = "enforce"
 )
 
+var errPreStartupBindings = errors.New("agent: binding evidence predates startup")
+
 // Persistence exposes normal state operations only. Initialization and reset
 // are deliberately absent. Both functions must honor context cancellation.
 type Persistence struct {
@@ -50,6 +52,9 @@ type Enforcement struct {
 	ClearOwnership       func(context.Context) error
 	RefreshConfiguration func(context.Context, policy.OwnerConfiguration) error
 	ClearConfiguration   func(context.Context) error
+	// Close atomically withdraws both positive authority channels and seals
+	// application permits while retaining the supplied negative history.
+	Close func(context.Context, state.Classification) error
 }
 
 // Options contains privileged local dependencies. Bindings must reread an
@@ -81,6 +86,7 @@ type Engine struct {
 	observation          observation
 	provenance           atomic.Pointer[ipc.ObservationSnapshot]
 	named                bool
+	requiresBindings     bool
 	ownershipFingerprint string
 	ownershipEpoch       uint32
 	configurationEpoch   uint32
@@ -101,7 +107,8 @@ func New(baseline policy.Baseline, options Options) (*Engine, error) {
 			options.Firewall.RefreshConfiguration == nil && options.Firewall.ClearConfiguration == nil
 	validEpoch := options.Mode == Enforce && named && options.State.AdvanceOwnershipEpoch != nil ||
 		(options.Mode == Shadow || !named) && options.State.AdvanceOwnershipEpoch == nil
-	if !validMode || !validFirewall || !validOwnership || !validEpoch || options.State.Load == nil || options.State.Save == nil ||
+	validClose := options.Firewall.Close == nil || options.Mode == Enforce && named
+	if !validMode || !validFirewall || !validOwnership || !validEpoch || !validClose || options.State.Load == nil || options.State.Save == nil ||
 		options.Bindings == nil || options.Clock == nil {
 		return nil, errors.New("agent: invalid helper dependencies")
 	}
@@ -111,7 +118,7 @@ func New(baseline policy.Baseline, options Options) (*Engine, error) {
 	}
 	return &Engine{
 		compiler: compiler, options: options, gate: make(chan struct{}, 1),
-		named: named, classification: state.EmptyClassification(),
+		named: named, requiresBindings: named && len(baseline.NetworkModel.ManagedNetworks) != 0, classification: state.EmptyClassification(),
 		lease: time.Duration(baseline.LeaseSeconds) * time.Second, maximumDevices: baseline.MaximumDevices,
 		observation: observation{report: ipc.Report{
 			SchemaVersion: 1, Mode: string(options.Mode), HelperState: "not_started", PermitState: "unobserved",
@@ -348,18 +355,18 @@ func (engine *Engine) Process(
 
 func (engine *Engine) checkStartupBindings(ctx context.Context, snapshot binding.Snapshot) error {
 	if snapshot.ObservedAt.Before(engine.startupTime) {
-		return errors.New("agent: binding snapshot predates helper startup")
+		return fmt.Errorf("agent: binding snapshot predates helper startup: %w", errPreStartupBindings)
 	}
 	for _, record := range snapshot.Records {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if record.AssociatedAt.Before(engine.startupTime) {
-			return errors.New("agent: association evidence predates helper startup")
+			return fmt.Errorf("agent: association evidence predates helper startup: %w", errPreStartupBindings)
 		}
 		for _, address := range record.Addresses {
 			if address.ObservedAt.Before(engine.startupTime) {
-				return errors.New("agent: address evidence predates helper startup")
+				return fmt.Errorf("agent: address evidence predates helper startup: %w", errPreStartupBindings)
 			}
 		}
 	}
@@ -375,13 +382,38 @@ func (engine *Engine) Stop(ctx context.Context) error {
 	defer engine.release()
 	engine.started = false
 	engine.observation.report.HelperState = "stopped"
+	return engine.close(ctx, state.EmptyClassification())
+}
+
+// close is used only for terminal transitions under the engine gate. A named
+// backend can compose its existing denial-only changes in one transaction,
+// rather than spending the shared shutdown deadline on sequential inspections.
+func (engine *Engine) close(ctx context.Context, classification state.Classification) error {
+	engine.ownershipFingerprint = ""
+	engine.configurationEpoch = 0
+	if engine.options.Firewall.Close != nil {
+		owned, _, err := engine.classificationUnion(classification)
+		if err != nil {
+			return err
+		}
+		if err := engine.options.Firewall.Close(ctx, owned); err != nil {
+			engine.observation.report.PermitState = "unknown"
+			engine.observation.report.LastFailure = "seal_failed"
+			engine.observation.deadlines = []countdown{}
+			return err
+		}
+		engine.classification = owned
+		engine.observation.report.PermitState = "sealed"
+		engine.observation.deadlines = []countdown{}
+		return nil
+	}
 	var ownershipErr error
 	if engine.named && engine.options.Mode == Enforce {
 		ownershipErr = errors.Join(engine.options.Firewall.ClearOwnership(ctx), engine.options.Firewall.ClearConfiguration(ctx))
 		engine.ownershipFingerprint = ""
 		engine.configurationEpoch = 0
 	}
-	return errors.Join(ownershipErr, engine.seal(ctx, state.EmptyClassification()))
+	return errors.Join(ownershipErr, engine.seal(ctx, classification))
 }
 
 func (engine *Engine) seal(ctx context.Context, classification state.Classification) error {
