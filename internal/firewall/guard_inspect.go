@@ -301,6 +301,36 @@ func guardObjectFromListing(raw json.RawMessage) (string, map[string]json.RawMes
 	return "", nil, errors.New("firewall: guarded object missing")
 }
 
+func checkGuardObject(fields map[string]json.RawMessage, expected map[string]any, hasElements bool) (uint64, error) {
+	if expected == nil {
+		return 0, errors.New("firewall: guarded object outside fixed schema")
+	}
+	required := make([]string, 0, len(expected)+1)
+	for key := range expected {
+		required = append(required, key)
+	}
+	required = append(required, "handle")
+	optional := []string{}
+	if hasElements {
+		optional = append(optional, "elem")
+	}
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return 0, errors.New("firewall: guarded header encoding failed")
+	}
+	if err := strictjson.Object(data, required, optional, maximumOutput); err != nil {
+		return 0, err
+	}
+	return checkGuardObjectFromListing(fields, expected, hasElements)
+}
+
+// The enclosing listing supplied strict syntax and duplicate-key validation.
+// This still requires every exact code-owned header key, rejects null or extra
+// fields, checks a unique positive handle, and compares complete expressions.
+func checkGuardObjectFromListing(fields map[string]json.RawMessage, expected map[string]any, hasElements bool) (uint64, error) {
+	return checkGuardObjectWithFields(fields, expected, hasElements, nil)
+}
+
 func checkGuardObjectWithFields(fields map[string]json.RawMessage, expected map[string]any, hasElements bool, compiled *guardCompiledFields) (uint64, error) {
 	if expected == nil {
 		return 0, errors.New("firewall: guarded object outside fixed schema")
