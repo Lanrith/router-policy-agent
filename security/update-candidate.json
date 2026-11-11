@@ -1,0 +1,44 @@
+{
+  "base_sha": "262793033d3b07cc88a93f1659df35b34fa6595b",
+  "candidate_id": "d917640ae69351d4828a9cdcea62c2b97ed86bd08d93a1f5ed4567aa20007ad8",
+  "changes": {
+    ".github/toolchains.json": {
+      "after_sha256": "5e1c53d8e36b63f71073219fac3cc7a896c5be50d475ac32301a5d9484100cfa",
+      "before_sha256": "573602ffa3c5e9e565ef6a7567dff82497ae5988e760e898091a2bf2d2302450"
+    },
+    ".go-version": {
+      "after_sha256": "8aaa0ceebbb8c07a5ee02836f7c2a290165924c9ada2b5c7b9b92f361a28a553",
+      "before_sha256": "55a45ba2851dc159876cb8854f80bf67b9eae781e67ce179708ea2e4f990fcd8"
+    }
+  },
+  "created_at": "2026-11-11T18:29:07.709053+00:00",
+  "kind": "security-update-candidate",
+  "policy_sha256": "7963a381f94301918d6db859bcaf47465efbec958ae4dede9eb4a89863dc9f88",
+  "producer_sha": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9",
+  "reasons": [
+    {
+      "ecosystem": "Go",
+      "evidence_sha256": "888002b23294e4e4d3bac1d1386830740c344004fdc5459bd767f8a29d992c27",
+      "fixed": "1.26.11",
+      "id": "GO-2026-6859",
+      "installed": "1.26.10",
+      "package": "stdlib",
+      "source": "https://api.osv.dev/v1/vulns/GO-2026-6859",
+      "type": "security-fix"
+    },
+    {
+      "ecosystem": "Go",
+      "evidence_sha256": "888002b23294e4e4d3bac1d1386830740c344004fdc5459bd767f8a29d992c27",
+      "fixed": "1.27.4",
+      "id": "GO-2026-6859",
+      "installed": "1.27.3",
+      "package": "stdlib",
+      "source": "https://api.osv.dev/v1/vulns/GO-2026-6859",
+      "type": "security-fix"
+    }
+  ],
+  "remediation_id": "security-3b1169896024179c0aee",
+  "repository": "Lanrith/router-policy-agent",
+  "requires_human": false,
+  "schema": 1
+}
