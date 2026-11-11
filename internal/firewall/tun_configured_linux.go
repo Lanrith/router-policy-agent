@@ -147,7 +147,16 @@ func runTUNService(ctx context.Context, options configuredOptions, config helper
 	defer func() { cancelObserver(); workers.Wait() }()
 	if options.observations != nil {
 		options.observations.SetUnlinkOnClose(false)
-		observer, err := ipc.NewObservationsServer(ipc.ServerOptions{ReaderUID: config.ObserverUID, Timeout: min(timeout, 2*time.Second)}, engine.Observations)
+		observer, err := ipc.NewObservationsServer(ipc.ServerOptions{ReaderUID: config.ObserverUID, Timeout: min(timeout, 2*time.Second)}, func(ctx context.Context, request ipc.ObservationRequest) (ipc.ObservationResponse, error) {
+			response, err := engine.Observations(ctx, request)
+			if response.Snapshot != nil {
+				// Identify the configured writer, without turning compilation
+				// provenance into a claim about current kernel installation.
+				response.Snapshot.WriterSequence = config.ExpectedGeneration.Sequence
+				response.Snapshot.FloorHash = config.ExpectedGeneration.FloorHash
+			}
+			return response, err
+		})
 		if err != nil {
 			return err
 		}

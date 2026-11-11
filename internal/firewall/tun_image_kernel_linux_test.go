@@ -299,7 +299,8 @@ func exerciseTUNIPC(ctx context.Context, t *testing.T, config helperConfig, nft 
 		}
 		command := exec.CommandContext(ctx, executable, "-test.run=^TestTUNIPCClient$")
 		command.Env = []string{"LANRITH_TUN_IPC_CHILD=1", "LANRITH_TUN_IPC_SOCKET=" + endpoint,
-			"LANRITH_TUN_IPC_OPERATION=" + operation, "LANRITH_TUN_IPC_EXPECT=" + expected}
+			"LANRITH_TUN_IPC_OPERATION=" + operation, "LANRITH_TUN_IPC_EXPECT=" + expected,
+			"LANRITH_TUN_IPC_FLOOR=" + config.ExpectedGeneration.FloorHash}
 		command.Stdin = bytes.NewReader(data)
 		command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: 0, NoSetGroups: true}}
 		if output, err := command.CombinedOutput(); err != nil {
@@ -415,6 +416,9 @@ func readTUNObservation(ctx context.Context, path string) error {
 	}
 	if response.Code != "" || response.Snapshot == nil || response.Snapshot.Total == 0 {
 		return errors.New("missing current observation snapshot")
+	}
+	if response.Snapshot.WriterSequence == 0 || response.Snapshot.FloorHash != os.Getenv("LANRITH_TUN_IPC_FLOOR") {
+		return errors.New("observation omitted its configured writer identity")
 	}
 	return nil
 }
