@@ -16,8 +16,10 @@ type Authorization struct {
 }
 
 type authorization struct {
-	candidate Candidate
-	anchor    time.Time
+	candidate   Candidate
+	anchor      time.Time
+	bindings    []string
+	observation AuthorizationObservation
 }
 
 // AgeAnchor is a helper-local elapsed-time sample. Its private reading cannot be
@@ -64,7 +66,23 @@ func (compiler *Compiler) CompileAuthorization(
 	if err != nil {
 		return Authorization{}, err
 	}
-	return Authorization{data: &authorization{candidate: candidate, anchor: anchor.tick}}, nil
+	bindings, err := authorizationBindingReferences(ctx, candidate, input.Bindings)
+	if err != nil {
+		return Authorization{}, err
+	}
+	directory, err := DirectoryFingerprint(input.Directory)
+	if err != nil {
+		return Authorization{}, err
+	}
+	ledger, err := LedgerFingerprint(candidate.Ledger)
+	if err != nil {
+		return Authorization{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Authorization{}, err
+	}
+	return Authorization{data: &authorization{candidate: candidate, anchor: anchor.tick, bindings: bindings,
+		observation: AuthorizationObservation{DirectoryObservedAt: input.Directory.ObservedAt, DirectorySHA256: directory, LedgerSHA256: ledger}}}, nil
 }
 
 // Snapshot returns an independent diagnostic/state copy, never an editable

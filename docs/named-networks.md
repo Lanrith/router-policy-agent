@@ -1,5 +1,8 @@
 # Named network contract
 
+The client-facing TUN backend is described in [TUN policy integration](tun-policy.md).
+The detailed legacy packet layouts below apply to the retained older profile format.
+
 The optional `network_model` baseline field replaces the six fixed role names
 with router-selected network names. Existing baselines keep their original
 validation and Untrusted policy boundary. The directory attribute retains the

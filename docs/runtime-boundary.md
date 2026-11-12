@@ -1,5 +1,8 @@
 # Local transport and durable state
 
+The client-facing TUN backend is described in [TUN policy integration](tun-policy.md).
+The detailed legacy packet layouts below apply to the retained older profile format.
+
 These packages implement the helper boundary, not an installed firewall service.
 The reader command submits fresh directory data to a checked root-helper socket;
 no current command starts the helper or directly updates nftables. The private guarded

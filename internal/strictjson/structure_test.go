@@ -64,7 +64,8 @@ func strictStructureSeeds() [][]byte {
 	for _, seed := range seeds {
 		result = append(result, []byte(seed))
 	}
-	return append(result, []byte("{\"value\":\"\xff\"}"))
+	result = append(result, []byte("{\"value\":\"\xff\"}"))
+	return append(result, keySpanBoundarySeeds()...)
 }
 
 func TestStrictStructureMatchesOriginalDecoder(t *testing.T) {

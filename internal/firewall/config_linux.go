@@ -24,22 +24,24 @@ const radiusShadowSource = "radius_shadow"
 // release/configuration, not be learned from live files or firewall listings.
 // It cannot initialize state, override clocks, supply bindings or select hooks.
 type helperConfig struct {
-	ObserverUID        uint32           `json:"observer_uid,omitempty"`
-	ObservationsSocket string           `json:"observations_socket,omitempty"`
-	SchemaVersion      int              `json:"schema_version"`
-	Mode               agent.Mode       `json:"mode"`
-	BindingSource      string           `json:"binding_source,omitempty"`
-	Profile            helperProfile    `json:"profile"`
-	GenerationDir      string           `json:"generation_directory"`
-	StateDir           string           `json:"state_directory"`
-	NFTExecutable      string           `json:"nft_executable"`
-	ReaderUID          uint32           `json:"reader_uid"`
-	OperatorUID        uint32           `json:"operator_uid"`
-	RequestTimeoutMS   uint32           `json:"request_timeout_ms"`
-	RequestSocket      string           `json:"request_socket"`
-	StatusSocket       string           `json:"status_socket"`
-	ExpectedGeneration writerGeneration `json:"expected_generation"`
-	NAT64Runtime       *helperProfile   `json:"nat64_runtime,omitempty"`
+	Backend             string           `json:"backend,omitempty"`
+	ConntrackExecutable string           `json:"conntrack_executable,omitempty"`
+	ObserverUID         uint32           `json:"observer_uid,omitempty"`
+	ObservationsSocket  string           `json:"observations_socket,omitempty"`
+	SchemaVersion       int              `json:"schema_version"`
+	Mode                agent.Mode       `json:"mode"`
+	BindingSource       string           `json:"binding_source,omitempty"`
+	Profile             helperProfile    `json:"profile"`
+	GenerationDir       string           `json:"generation_directory"`
+	StateDir            string           `json:"state_directory"`
+	NFTExecutable       string           `json:"nft_executable"`
+	ReaderUID           uint32           `json:"reader_uid"`
+	OperatorUID         uint32           `json:"operator_uid"`
+	RequestTimeoutMS    uint32           `json:"request_timeout_ms"`
+	RequestSocket       string           `json:"request_socket"`
+	StatusSocket        string           `json:"status_socket"`
+	ExpectedGeneration  writerGeneration `json:"expected_generation"`
+	NAT64Runtime        *helperProfile   `json:"nat64_runtime,omitempty"`
 }
 
 type helperProfile struct {
@@ -58,7 +60,7 @@ func decodeHelperConfig(ctx context.Context, data []byte) (helperConfig, error) 
 		"schema_version", "mode", "profile", "generation_directory", "state_directory", "nft_executable",
 		"reader_uid", "operator_uid", "request_timeout_ms", "request_socket", "status_socket", "expected_generation",
 	}
-	if err := strictjson.Object(data, keys, []string{"binding_source", "observer_uid", "observations_socket", "nat64_runtime"}, maximumHelperConfig); err != nil {
+	if err := strictjson.Object(data, keys, []string{"binding_source", "observer_uid", "observations_socket", "nat64_runtime", "backend", "conntrack_executable"}, maximumHelperConfig); err != nil {
 		return helperConfig{}, profileFailure("helper configuration structure invalid", err)
 	}
 	object := map[string]json.RawMessage{}
@@ -90,6 +92,17 @@ func decodeHelperConfig(ctx context.Context, data []byte) (helperConfig, error) 
 }
 
 func (c helperConfig) validate() error {
+	if c.Backend != "" && c.Backend != "tun" {
+		return errors.New("firewall: unsupported helper backend")
+	}
+	if c.Backend == "tun" {
+		if c.Mode != agent.Enforce || c.NAT64Runtime != nil || !helperPath(c.ConntrackExecutable, 4096) {
+			return errors.New("firewall: invalid TUN backend resources")
+		}
+	} else if c.ConntrackExecutable != "" {
+		return errors.New("firewall: connection tool requires TUN backend")
+	}
+
 	if c.Mode != agent.Shadow && c.Mode != agent.Enforce {
 		return errors.New("firewall: helper requires an explicit valid mode")
 	}

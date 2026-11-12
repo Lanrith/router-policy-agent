@@ -26,7 +26,7 @@ func RunProfile(ctx context.Context, args []string, streams CheckIO) int {
 	if ctx == nil || streams.Out == nil || streams.Err == nil {
 		return 2
 	}
-	var baselinePath, rulesetPath, outputDirectory string
+	var baselinePath, rulesetPath, outputDirectory, backend, guardPath string
 	var version bool
 	var messages bytes.Buffer
 	flags := flag.NewFlagSet("router-policy-profile", flag.ContinueOnError)
@@ -34,6 +34,8 @@ func RunProfile(ctx context.Context, args []string, streams CheckIO) int {
 	flags.StringVar(&baselinePath, "baseline", "", "strict normalized policy baseline JSON (required)")
 	flags.StringVar(&rulesetPath, "ruleset", "", "complete nftables JSON listing before helper guards (required)")
 	flags.StringVar(&outputDirectory, "output-directory", "", "existing empty artifact directory (required)")
+	flags.StringVar(&guardPath, "guards", "", "compiled physical TUN guards (TUN builds only)")
+	flags.StringVar(&backend, "backend", "legacy", "image compiler backend: legacy or tun")
 	flags.BoolVar(&version, "version", false, "print build version")
 	flags.Usage = func() {
 		fmt.Fprintln(&messages, "Build pinned image policy artifacts; source router YAML is not accepted.")
@@ -69,7 +71,26 @@ func RunProfile(ctx context.Context, args []string, streams CheckIO) int {
 	if err != nil {
 		return profileDiagnostic(streams.Err, "ruleset input unavailable", 1)
 	}
-	artifacts, err := firewall.BuildImageProfile(ctx, baseline, ruleset)
+	var artifacts firewall.ImageProfileArtifacts
+	switch backend {
+	case "legacy":
+		if guardPath != "" {
+			return profileDiagnostic(streams.Err, "physical guards require TUN backend", 2)
+		}
+		artifacts, err = firewall.BuildImageProfile(ctx, baseline, ruleset)
+	case "tun":
+		if guardPath == "" {
+			artifacts, err = firewall.BuildTUNImageProfile(ctx, baseline, ruleset)
+		} else {
+			guards, readErr := readBounded(guardPath, 2<<20)
+			if readErr != nil {
+				return profileDiagnostic(streams.Err, "physical guard input unavailable", 1)
+			}
+			artifacts, err = firewall.BuildTUNImageProfile(ctx, baseline, ruleset, guards)
+		}
+	default:
+		return profileDiagnostic(streams.Err, "unsupported backend", 2)
+	}
 	if err != nil {
 		return profileDiagnostic(streams.Err, "profile compilation failed", 1)
 	}

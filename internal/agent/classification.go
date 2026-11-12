@@ -37,13 +37,19 @@ func (engine *Engine) classificationUnion(input state.Classification) (state.Cla
 	return checked, added, err
 }
 
-func (engine *Engine) publishClassification(ctx context.Context, history state.Classification) error {
+// The result records a completed classification rotation, including withdrawal
+// of old ownership and application permits. It is local to the current engine
+// transaction; it is neither a source receipt nor authorization.
+func (engine *Engine) publishClassification(ctx context.Context, history state.Classification) (bool, error) {
 	_, added, err := engine.classificationUnion(history)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if added || engine.classificationFailed {
-		return engine.seal(ctx, history)
+		if err := engine.seal(ctx, history); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return nil
+	return false, nil
 }

@@ -1,6 +1,7 @@
 package strictjson
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -41,13 +42,13 @@ func structureValue(data []byte, position, depth int) (int, error) {
 			if err != nil {
 				return 0, err
 			}
-			key := ""
+			key := structureKey{raw: data[start+1 : end-1]}
 			if escaped {
-				if err := json.Unmarshal(data[start:end], &key); err != nil {
+				var decoded string
+				if err := json.Unmarshal(data[start:end], &decoded); err != nil {
 					return 0, errors.New("invalid object key")
 				}
-			} else {
-				key = string(data[start+1 : end-1])
+				key = structureKey{decoded: decoded}
 			}
 			if !keys.add(key) {
 				return 0, errors.New("duplicate or invalid object key")
@@ -132,24 +133,54 @@ func structureSpace(data []byte, position int) int {
 	return position
 }
 
-// Most NFT objects have one to four fields. Keep their key inventory on the
-// stack; larger objects retain an ordinary map with the same exact comparison.
+// Unescaped key spans live only during this synchronous structure walk. They
+// avoid allocating an owned string for each repeated key in large listings.
+// Escapes still use encoding/json's complete decoded Unicode representation.
+// No span is cached or retained in a decoded value; promoted maps own strings.
+type structureKey struct {
+	raw     []byte
+	decoded string
+}
+
+func (key structureKey) equal(other structureKey) bool {
+	switch {
+	case key.raw != nil && other.raw != nil:
+		return bytes.Equal(key.raw, other.raw)
+	case key.raw != nil:
+		return string(key.raw) == other.decoded
+	case other.raw != nil:
+		return key.decoded == string(other.raw)
+	default:
+		return key.decoded == other.decoded
+	}
+}
+
+func (key structureKey) owned() string {
+	if key.raw != nil {
+		return string(key.raw)
+	}
+	return key.decoded
+}
+
+// Most objects have one to four fields. Keep their key inventory on the stack;
+// larger objects retain an ordinary map with the same exact comparison.
 type structureKeys struct {
-	small [8]string
+	small [8]structureKey
 	count int
 	large map[string]struct{}
 }
 
-func (keys *structureKeys) add(key string) bool {
+func (keys *structureKeys) add(key structureKey) bool {
 	if keys.large != nil {
-		if _, exists := keys.large[key]; exists {
+		owned := key.owned()
+		if _, exists := keys.large[owned]; exists {
 			return false
 		}
-		keys.large[key] = struct{}{}
+		keys.large[owned] = struct{}{}
 		return true
 	}
 	for _, previous := range keys.small[:keys.count] {
-		if previous == key {
+		if previous.equal(key) {
 			return false
 		}
 	}
@@ -160,8 +191,8 @@ func (keys *structureKeys) add(key string) bool {
 	}
 	keys.large = make(map[string]struct{}, 2*len(keys.small))
 	for _, previous := range keys.small {
-		keys.large[previous] = struct{}{}
+		keys.large[previous.owned()] = struct{}{}
 	}
-	keys.large[key] = struct{}{}
+	keys.large[key.owned()] = struct{}{}
 	return true
 }

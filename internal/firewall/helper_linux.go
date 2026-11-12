@@ -77,6 +77,9 @@ func InitializeState(ctx context.Context, directory string) (result error) {
 	if err != nil {
 		return err
 	}
+	if config.Backend == "tun" {
+		return initializeTUNState(ctx, config)
+	}
 	store, err := state.Open(ctx, state.Options{Directory: config.StateDir, OwnerUID: 0})
 	if err != nil {
 		return err

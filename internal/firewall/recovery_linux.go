@@ -19,6 +19,9 @@ func Recover(ctx context.Context, directory string) (result error) {
 	if err != nil {
 		return err
 	}
+	if config.Backend == "tun" {
+		return recoverTUN(ctx, config)
+	}
 	resources, err := openConfiguredOwner(ctx, config)
 	if err != nil {
 		return err

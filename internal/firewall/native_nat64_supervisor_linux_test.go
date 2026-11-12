@@ -184,13 +184,18 @@ func TestNAT64RuntimeStatusRequiresFreshKernelMonotonicEvidence(t *testing.T) {
 	if _, err := decodeNAT64RuntimeStatus(t.Context(), valid); err != nil {
 		t.Fatal("fresh strict runtime status rejected", err)
 	}
-	for _, changed := range [][]byte{
-		[]byte(strings.Replace(string(valid), `"pid":`+strconv.Itoa(os.Getpid()), `"pid":1`, 1)),
-		[]byte(strings.Replace(string(valid), `"monotonic":`+strconv.FormatFloat(now, 'g', -1, 64), `"monotonic":0`, 1)),
-		[]byte(strings.Replace(string(valid), `"configuration_sha256":`, `"yaml":"owner.yaml","configuration_sha256":`, 1)),
-	} {
-		if _, err := decodeNAT64RuntimeStatus(t.Context(), changed); err == nil {
-			t.Fatal("invalid or stale NAT64 runtime status accepted", string(changed))
+	for key, value := range map[string]any{"pid": 1, "monotonic": 0, "yaml": "owner.yaml"} {
+		var changed map[string]any
+		if err := json.Unmarshal(valid, &changed); err != nil {
+			t.Fatal(err)
+		}
+		changed[key] = value
+		encoded, err := json.Marshal(changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeNAT64RuntimeStatus(t.Context(), encoded); err == nil {
+			t.Fatal("invalid or stale NAT64 runtime status accepted", key)
 		}
 	}
 }
