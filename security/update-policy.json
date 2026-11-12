@@ -25,5 +25,14 @@
     ]
   },
   "reviewer_app_id": 5444158,
-  "schema": 1
+  "schema": 1,
+  "release_authorization": {
+    "mode": "maintainer-merge",
+    "maintainers": [
+      {
+        "login": "mikenorgate",
+        "id": 2479870
+      }
+    ]
+  }
 }
