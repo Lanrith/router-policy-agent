@@ -21,6 +21,6 @@ jobs:
       actions: read
       pull-requests: write
       issues: write
-    uses: Lanrith/lanrith/.github/workflows/request-human-review.yml@da70a1551b2e2f502cb9b9b5a384fcd990700bd9
+    uses: Lanrith/lanrith/.github/workflows/request-human-review.yml@a01ce75baadc45f7da2958a92374384980c99e2f
     with:
       pr: ${{ fromJSON(inputs.pr || '0') }}
