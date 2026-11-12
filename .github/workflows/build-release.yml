@@ -94,7 +94,7 @@ jobs:
       issues: write
       id-token: write
       attestations: write
-    uses: Lanrith/lanrith/.github/workflows/publish-release.yml@da70a1551b2e2f502cb9b9b5a384fcd990700bd9
+    uses: Lanrith/lanrith/.github/workflows/publish-release.yml@035f0f69466b4de893312de955a30fab947cbd61
     with:
       artifact-id: ${{ needs.attest.outputs.artifact-id }}
       version: ${{ inputs.version }}
