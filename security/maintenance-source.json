@@ -1,10 +1,10 @@
 {
-  "actual_human_review_id": 5750835295,
-  "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-41647685219-1",
+  "actual_human_review_id": 5864303442,
+  "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-43196616397-1",
   "repository": "Lanrith/lanrith",
-  "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261103T170242Z-1cb637fc6b6c",
+  "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261112T134309Z-cde0b79ec01c",
   "schema": 1,
-  "source_commit": "da70a1551b2e2f502cb9b9b5a384fcd990700bd9",
-  "verification_record_sha256": "7ed4cdc2a6032903ec6bd9809ed277cc9cdf8ff977378fed547df7f4652f9477",
-  "version": "v0.1.18"
+  "source_commit": "a01ce75baadc45f7da2958a92374384980c99e2f",
+  "verification_record_sha256": "fe1377bd3768ab28b11d224cfbfe6a0ad35d7b9c662c3eafb2b7d3cf1d750c3e",
+  "version": "v0.1.20"
 }

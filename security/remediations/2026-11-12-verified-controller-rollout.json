@@ -1,0 +1,35 @@
+{
+  "base_commit": "4d117ab06cb20a6edd3f12adf40c24e6913f377c",
+  "controller": {
+    "actual_human_review_id": 5864303442,
+    "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-43196616397-1",
+    "repository": "Lanrith/lanrith",
+    "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261112T134309Z-cde0b79ec01c",
+    "schema": 1,
+    "source_commit": "a01ce75baadc45f7da2958a92374384980c99e2f",
+    "verification_record_sha256": "fe1377bd3768ab28b11d224cfbfe6a0ad35d7b9c662c3eafb2b7d3cf1d750c3e",
+    "version": "v0.1.20"
+  },
+  "controller_verification_sha256": "fe1377bd3768ab28b11d224cfbfe6a0ad35d7b9c662c3eafb2b7d3cf1d750c3e",
+  "created_at": "2026-11-12T17:48:45.414737+00:00",
+  "dependency_monitoring": "Group all shared Lanrith workflow dependency alerts in one Dependabot PR. Verified source metadata and human source review remain mandatory; no updates are ignored or automatically approved.",
+  "fresh_approval_scope": "A new independent human must review and approve the entire current candidate source, including the earlier feature changes and this controller rollout, after all new exact-head CI passes. The publication audit includes the full diff from the last published component source to this candidate, not just the controller changes visible in the PR diff. Only that new actual approval can authorize a subsequent source publication.",
+  "historical_review_gap": {
+    "actual_reviews": [],
+    "head": "465d421fc33badb3f99dd570fafb0f339c5763b1",
+    "merge_commit": "4d117ab06cb20a6edd3f12adf40c24e6913f377c",
+    "merged_at": "2026-11-12T08:49:56Z",
+    "pull_request": 18,
+    "release_failure": "A merged release change lacks a commit-bound approval.",
+    "treatment": "The prior missing review is recorded as missing. It is not invented, replaced or retroactively claimed. No release guard is weakened.",
+    "url": "https://github.com/Lanrith/router-policy-agent/pull/18"
+  },
+  "kind": "verified-controller-rollout-and-current-source-requalification",
+  "last_published_source": "228f16fa8f74cad93f92fa0ebfac86c3beb5fb04",
+  "paid_ai": false,
+  "preserved": "All owner feature code, Go manifests/toolchains, unrelated dependency PRs, branch protection, scanner gates and one-day handoff retention.",
+  "protection_bypass": false,
+  "reason": "The deployed old controller installs Go1.27.3 and blocks ordinary security proposals on GO-2026-6859 even though the component itself is rebuilt with Go1.27.4. Deploy the verified v0.1.20 controller, which authenticates and selects the proposed SDK before reachable-code scanning. Update all five shared workflow refs and the release collector checkout atomically.",
+  "repository": "Lanrith/router-policy-agent",
+  "schema": 1
+}
