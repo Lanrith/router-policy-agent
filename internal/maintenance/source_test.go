@@ -12,14 +12,15 @@ import (
 )
 
 type maintenanceSource struct {
-	Schema                   int    `json:"schema"`
-	Repository               string `json:"repository"`
-	Commit                   string `json:"source_commit"`
-	Version                  string `json:"version"`
-	PublicationAudit         string `json:"publication_audit"`
-	RetainedAssessment       string `json:"retained_assessment"`
-	VerificationRecordSHA256 string `json:"verification_record_sha256"`
-	HumanReview              int64  `json:"actual_human_review_id"`
+	Schema                    int    `json:"schema"`
+	Repository                string `json:"repository"`
+	Commit                    string `json:"source_commit"`
+	Version                   string `json:"version"`
+	PublicationAudit          string `json:"publication_audit"`
+	RetainedAssessment        string `json:"retained_assessment"`
+	VerificationRecordSHA256  string `json:"verification_record_sha256"`
+	ReleaseAuthorization      string `json:"release_authorization"`
+	AuthorizationRecordSHA256 string `json:"authorization_record_sha256"`
 }
 
 type maintenanceWorkflow struct {
@@ -111,15 +112,58 @@ func reviewedMaintenanceSource(t *testing.T) (*os.Root, maintenanceSource) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		t.Fatal("maintenance source must contain one JSON document")
 	}
-	if source.Schema != 1 || source.Repository != "Lanrith/lanrith" ||
-		!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(source.Commit) ||
-		!regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(source.Version) ||
-		!regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(source.VerificationRecordSHA256) || source.HumanReview <= 0 ||
-		!strings.HasPrefix(source.PublicationAudit, "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-") ||
-		!strings.HasPrefix(source.RetainedAssessment, "https://github.com/Lanrith/lanrith/releases/tag/assessment-") {
-		t.Fatal("maintenance source lacks its reviewed release and verification identities")
+	if !validMaintenanceSource(source) {
+		t.Fatal("maintenance source lacks its authorized release and verification identities")
 	}
 	return files, source
+}
+
+// These are evidence references, not a substitute for verifying hosted release
+// attestations. Both authorization modes bind the actual signed update record;
+// a maintainer merge must never be recorded as an independent review.
+func validMaintenanceSource(source maintenanceSource) bool {
+	return source.Schema == 2 && source.Repository == "Lanrith/lanrith" &&
+		regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(source.Commit) &&
+		regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(source.Version) &&
+		regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(source.VerificationRecordSHA256) &&
+		regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(source.AuthorizationRecordSHA256) &&
+		(source.ReleaseAuthorization == "independent-review" || source.ReleaseAuthorization == "maintainer-merge") &&
+		strings.HasPrefix(source.PublicationAudit, "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-") &&
+		strings.HasPrefix(source.RetainedAssessment, "https://github.com/Lanrith/lanrith/releases/tag/assessment-")
+}
+
+func TestMaintenanceAuthorizationEvidence(t *testing.T) {
+	t.Parallel()
+	_, source := reviewedMaintenanceSource(t)
+	for _, mode := range []string{"independent-review", "maintainer-merge"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			candidate := source
+			candidate.ReleaseAuthorization = mode
+			if !validMaintenanceSource(candidate) {
+				t.Fatal("supported authorization mode with evidence was rejected")
+			}
+		})
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*maintenanceSource)
+	}{
+		{name: "missing authorization", change: func(s *maintenanceSource) { s.ReleaseAuthorization = "" }},
+		{name: "unknown authorization", change: func(s *maintenanceSource) { s.ReleaseAuthorization = "bypass" }},
+		{name: "missing record", change: func(s *maintenanceSource) { s.AuthorizationRecordSHA256 = "" }},
+		{name: "invalid record", change: func(s *maintenanceSource) { s.AuthorizationRecordSHA256 = strings.Repeat("g", 64) }},
+		{name: "obsolete schema", change: func(s *maintenanceSource) { s.Schema = 1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			candidate := source
+			test.change(&candidate)
+			if validMaintenanceSource(candidate) {
+				t.Fatal("invalid authorization evidence passed the source contract")
+			}
+		})
+	}
 }
 
 func validateMaintenanceReferences(raw []byte, workflow maintenanceWorkflow, commit string) error {
