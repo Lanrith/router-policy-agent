@@ -11,10 +11,6 @@ updates:
       compatible-updates:
         update-types: [minor, patch]
   - package-ecosystem: github-actions
-    # Shared controller references must move together with their verified source record.
-    groups:
-      lanrith-maintenance:
-        patterns: ['Lanrith/lanrith/*']
     directory: /
     schedule:
       interval: weekly
