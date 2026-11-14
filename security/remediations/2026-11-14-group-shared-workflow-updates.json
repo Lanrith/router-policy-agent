@@ -1,0 +1,17 @@
+{
+  "base_commit": "ad3a2be2c8dba9974510b1973650eaccd728a945",
+  "created_at": "2026-11-14T09:29:17.081391+00:00",
+  "kind": "group-shared-maintenance-workflow-dependencies",
+  "limits": "Dependabot does not refresh the collector checkout or verified source manifest automatically. Every future controller proposal must still update all six references and verified provenance together, pass full CI and receive the applicable source authorization. Grouping does not itself authorize a controller update.",
+  "paid_ai": false,
+  "reason": "Separate Dependabot updates to shared workflow references produced incomplete maintenance-source deployments and failed the atomic source contract. Group all shared Lanrith workflow alerts so they can be completed and reviewed in one PR.",
+  "repository": "Lanrith/router-policy-agent",
+  "review": "New current-source CI and normal protected review required. No review or branch-protection exception is supplied by this change.",
+  "schema": 1,
+  "scope": "Only dependency grouping and this reason record differ from current Main. Adopt the actually merged v0.1.21 controller, its provenance manifest and maintainer policy unchanged; remove the obsolete v0.1.20 rollout from this PR.",
+  "superseded_controller_rollout": {
+    "old_head": "395395f3fa00972a0946d2208da0d7ea7b5efaef",
+    "pull_request": 23,
+    "replaced_by": 24
+  }
+}

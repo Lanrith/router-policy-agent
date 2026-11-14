@@ -11,6 +11,9 @@ updates:
       compatible-updates:
         update-types: [minor, patch]
   - package-ecosystem: github-actions
+    groups:
+      lanrith-maintenance:
+        patterns: ['Lanrith/lanrith/*']
     directory: /
     schedule:
       interval: weekly
