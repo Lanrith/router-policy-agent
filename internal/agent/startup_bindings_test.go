@@ -90,6 +90,47 @@ func TestStartupBindingWaitIsBoundedAndDoesNotRenewEvidence(t *testing.T) {
 	})
 }
 
+func TestStartupBindingsWaitForClockRecovery(t *testing.T) {
+	t.Parallel()
+	for _, recoverClock := range []bool{true, false} {
+		name := "clock stays unavailable"
+		if recoverClock {
+			name = "clock recovers"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				f, options := newOwnershipFixture(t)
+				var unavailableSince time.Time
+				options.Clock = func() time.Time {
+					if !unavailableSince.IsZero() && (!recoverClock || time.Since(unavailableSince) < 3*time.Second) {
+						return time.Time{}
+					}
+					return f.utc()
+				}
+				engine := f.engine(t, options)
+				unavailableSince = time.Now()
+				err := engine.InitializeBindings(t.Context())
+				if recoverClock {
+					if err != nil || time.Since(unavailableSince) != 3*time.Second {
+						t.Fatal("startup did not wait for the clock to recover", err)
+					}
+					if f.refreshes != 1 || len(f.evidence.Addresses) != 1 || len(f.firewall.active) != 0 {
+						t.Fatal("clock recovery did not install qualified ownership independently of grants")
+					}
+					return
+				}
+				if !errors.Is(err, context.DeadlineExceeded) || time.Since(unavailableSince) != 90*time.Second {
+					t.Fatal("clock wait did not respect the startup deadline", err)
+				}
+				if f.refreshes != 0 || len(f.firewall.active) != 0 {
+					t.Fatal("clock timeout left ownership or grants active")
+				}
+			})
+		})
+	}
+}
+
 func TestStartupBindingsRejectUnsafeInputsWithoutWaiting(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
