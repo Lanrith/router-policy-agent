@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "date": "2026-11-24",
+  "reason": "Individual shared-controller pin PRs failed the provenance contract and launched expensive qualification before consistency was checked. Routine Go updates also competed with the authenticated security proposer.",
+  "changes": [
+    "Run complete controller/collector consistency preflight before native and matrix jobs.",
+    "Group shared-controller Dependabot references into one discovery PR.",
+    "Use the authenticated security proposer for Go fixes; stop the separate routine-version PR queue."
+  ],
+  "rollout": "Adopt the newly qualified immutable platform controller in a separate complete bundle after the platform repair is published. This bootstrap does not claim that rollout is complete.",
+  "approval": "Independent human review is required after all CI passes."
+}
