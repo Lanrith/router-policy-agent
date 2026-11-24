@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -73,25 +74,8 @@ func processFixture(t *testing.T, name string) (*process, string) {
 	if os.Geteuid() != 0 {
 		t.Skip("root-owned executable fixture runs in the isolated root CI job")
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// #nosec G304 -- The source is this test's own os.Executable result.
-	source, err := os.Open(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
 	path := filepath.Join(t.TempDir(), name)
-	// #nosec G304 G302 -- Fresh test directory, exclusive executable fixture.
-	target, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
-	if err != nil {
-		t.Fatal(errors.Join(err, source.Close()))
-	}
-	_, copyError := io.Copy(target, source)
-	if err := errors.Join(copyError, target.Close(), source.Close()); err != nil {
-		t.Fatal(err)
-	}
+	writeProcessFixture(t, path)
 	process, err := openProcess(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +88,33 @@ func processFixture(t *testing.T, name string) (*process, string) {
 		}
 	})
 	return process, path
+}
+
+func writeProcessFixture(t *testing.T, path string) {
+	t.Helper()
+	// O_CLOEXEC still permits a parallel fork to inherit the writable file
+	// until its exec. That temporary writer can make our exec fail ETXTBSY.
+	// Finish copying and close it before any test forks (golang/go#22315).
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G304 -- The source is this test's own os.Executable result.
+	source, err := os.Open(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// #nosec G304 G302 -- Fresh test directory, exclusive executable fixture.
+	target, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+	if err != nil {
+		t.Fatal(errors.Join(err, source.Close()))
+	}
+	_, copyError := io.Copy(target, source)
+	if err := errors.Join(copyError, target.Close(), source.Close()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProcessPinsExecutableAndRestrictsArguments(t *testing.T) {
