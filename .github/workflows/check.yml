@@ -11,7 +11,17 @@ permissions:
   contents: read
 
 jobs:
+  maintenance:
+    name: Maintenance provenance preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 packaging/check-maintenance.py
   toolchains:
+    needs: maintenance
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.config.outputs.matrix }}
@@ -92,6 +102,7 @@ jobs:
         run: |
           go tool cover -func=coverage.out | awk '/total:/ { sub(/%/, "", $3); if ($3 < 80) exit 1 }'
   kernel:
+    needs: maintenance
     name: Isolated nftables transactions
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -104,6 +115,7 @@ jobs:
       - name: Qualify non-root IPC through the actual guarded native backend
         run: make kernel-service
   lint:
+    needs: maintenance
     name: Lint
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -120,6 +132,7 @@ jobs:
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
           golangci-lint run --build-tags integration,kernel,servicekernel ./...
   security:
+    needs: maintenance
     name: Vulnerability check
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -139,7 +152,7 @@ jobs:
   required:
     name: Required checks
     if: always()
-    needs: [toolchains, test, integration, kernel, lint, security]
+    needs: [maintenance, toolchains, test, integration, kernel, lint, security]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every qualification gate
