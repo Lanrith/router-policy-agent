@@ -19,4 +19,11 @@ for path in (root/'.github/workflows').glob('*.yml'):
         collectors.append(pin)
 assert {'publish-release.yml','security-proposal.yml','security-review.yml','cleanup-artifacts.yml','request-human-review.yml'} <= set(references), 'Controller reference coverage is incomplete'
 assert len(collectors) == 1, 'Expected exactly one release collector'
-print('Complete controller and collector references verified.')
+# GitHub resolves environment secrets only when each nested caller forwards
+# them. The App key remains in the protected lanrith-updates environment; no
+# compilation or attestation job binds that environment.
+for filename, job in [('release.yml', 'release'), ('build-release.yml', 'publish')]:
+    text = (root/'.github/workflows'/filename).read_text()
+    block = re.search(r'(?ms)^  '+job+r':\n(?:(?!^  [A-Za-z0-9_-]+:).)*', text)
+    assert block and re.search(r'(?m)^    secrets: inherit$', block[0]), f'{filename}: forward the environment secret through the complete release call chain'
+print('Complete controller, collector and release credential routing verified.')

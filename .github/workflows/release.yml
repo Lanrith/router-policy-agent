@@ -34,5 +34,6 @@ jobs:
       attestations: write
       id-token: write
     uses: ./.github/workflows/build-release.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.value }}
