@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "date": "2026-11-26",
+  "kind": "manual-controller-rollout",
+  "requires_human": true,
+  "reason": "Grouped Dependabot controller updates omit maintenance-source.json and the release collector, so provenance preflight blocks them. The new recovery and complete workflow updater also need callers.",
+  "changes": [
+    "Adopt authenticated immutable controller v0.1.32 and its fresh retained security assessment.",
+    "Update all shared workflow and collector references together with maintenance-source.json.",
+    "Install the scheduled recovery and complete workflow updater callers, and include both in the partial-update regression contract.",
+    "Compose verified stable Action pins from the source PRs recorded in security/automation-update.json."
+  ],
+  "validation": "Publication provenance, exact controller source, independent approval record and retained security report were authenticated by the reviewed complete updater. Local contract/lint and hosted full CI are required before review.",
+  "activation": "Enable LANRITH_WORKFLOW_UPDATES_ENABLED after the reviewed caller is merged. Later controller releases produce complete human-reviewed proposals.",
+  "approval": "Independent current-head human approval after all builds pass. This record grants no approval."
+}

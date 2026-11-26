@@ -1,0 +1,18 @@
+name: Reconcile security automation
+on:
+  schedule:
+    - cron: '47 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  maintain:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+      checks: read
+      issues: write
+    uses: Lanrith/lanrith/.github/workflows/maintenance-reconcile.yml@ec7481231b31f7f0f98cfcad5d267b4e6fbf17f4
+    secrets: inherit
