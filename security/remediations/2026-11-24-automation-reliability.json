@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "date": "2026-11-24",
+  "reason": "Individual shared-controller pin PRs failed the provenance contract and launched expensive qualification before consistency was checked. Routine Go updates also competed with the authenticated security proposer.",
+  "changes": [
+    "Run complete controller/collector consistency preflight before native and matrix jobs.",
+    "Group shared-controller Dependabot references into one discovery PR.",
+    "Use the authenticated security proposer for Go fixes; stop the separate routine-version PR queue.",
+    "Serialize writable synthetic executable creation against fork so parallel integration tests cannot transiently fail with ETXTBSY."
+  ],
+  "rollout": "Adopt the newly qualified immutable platform controller in a separate complete bundle after the platform repair is published. This bootstrap does not claim that rollout is complete.",
+  "approval": "Independent human review is required after all CI passes.",
+  "additional_failure": {
+    "run": "https://github.com/Lanrith/router-policy-agent/actions/runs/45423994298",
+    "reproduction": "A race-enabled isolated Linux run with the failing shuffle seed, test.parallel=32 and count=12 reproduced fork/exec /proc/self/fd/3: text file busy and the deadline assertion failure.",
+    "cause": "A concurrent fork inherits an open writable fixture until its exec. Closing the parent descriptor is insufficient; O_CLOEXEC only closes the child copy during exec.",
+    "reference": "https://github.com/golang/go/issues/22315",
+    "repair": "Hold syscall.ForkLock for reading through fixture creation, copying and descriptor closure. No production command behavior or deadline assertions change.",
+    "validation": "The identical race-enabled concurrent stress command passes all 12 runs after the fix. Fresh hosted CI remains required before review."
+  }
+}

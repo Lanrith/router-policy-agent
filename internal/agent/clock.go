@@ -11,6 +11,8 @@ import (
 // discontinuities fail closed until UTC catches the monotonic lower bound.
 const maximumClockLag = 250 * time.Millisecond
 
+var errClockUnavailable = errors.New("agent: missing helper clock reading")
+
 type clockReading struct {
 	utc           time.Time
 	authorization time.Time
@@ -26,8 +28,11 @@ type helperClock struct {
 }
 
 func (clock *helperClock) advance(utc, tick time.Time) (time.Time, error) {
-	if clock == nil || utc.IsZero() || tick.IsZero() {
-		return time.Time{}, errors.New("agent: missing helper clock reading")
+	if clock == nil || tick.IsZero() {
+		return time.Time{}, errors.New("agent: missing monotonic clock")
+	}
+	if utc.IsZero() {
+		return time.Time{}, errClockUnavailable
 	}
 	utc = utc.Round(0).UTC()
 	if clock.lastTick.IsZero() {

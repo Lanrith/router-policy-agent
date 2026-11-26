@@ -132,9 +132,9 @@ func (engine *Engine) refreshBindings(ctx context.Context, startup bool) (result
 }
 
 // The caller holds the engine gate. During startup no request servers run and
-// classification remains closed. Only explicit incomplete publications and
-// otherwise-valid pre-start evidence may wait; unsafe/malformed/future inputs
-// still fail immediately. Every attempt rereads the independently owned source.
+// classification remains closed. Incomplete publications, valid pre-start
+// evidence and a temporarily unavailable clock may wait. Each attempt rereads
+// the source and validates it against a fresh clock sample.
 func (engine *Engine) collectBindings(ctx context.Context, startup bool) (binding.Snapshot, error) {
 	if !startup {
 		return engine.options.Bindings(ctx)
@@ -146,20 +146,23 @@ func (engine *Engine) collectBindings(ctx context.Context, startup bool) (bindin
 			return binding.Snapshot{}, err
 		}
 		snapshot, err := engine.options.Bindings(ctx)
+		var clockErr error
 		if err == nil {
-			now, clockErr := engine.now()
-			if clockErr != nil {
+			var now clockReading
+			now, clockErr = engine.now()
+			if clockErr == nil {
+				err = binding.Validate(snapshot, now.utc, engine.lease, engine.maximumDevices)
+				if err == nil {
+					err = engine.checkStartupBindings(ctx, snapshot)
+				}
+				if err == nil {
+					return snapshot, nil
+				}
+			} else if !errors.Is(clockErr, errClockUnavailable) {
 				return binding.Snapshot{}, clockErr
 			}
-			err = binding.Validate(snapshot, now.utc, engine.lease, engine.maximumDevices)
-			if err == nil {
-				err = engine.checkStartupBindings(ctx, snapshot)
-			}
-			if err == nil {
-				return snapshot, nil
-			}
 		}
-		pending := errors.Is(err, binding.ErrIncomplete) || errors.Is(err, errPreStartupBindings)
+		pending := clockErr != nil || errors.Is(err, binding.ErrIncomplete) || errors.Is(err, errPreStartupBindings)
 		if !pending {
 			return binding.Snapshot{}, err
 		}
