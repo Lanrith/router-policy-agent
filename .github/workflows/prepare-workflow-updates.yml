@@ -1,0 +1,16 @@
+name: Prepare complete workflow updates
+on:
+  schedule:
+    - cron: '37 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  maintain:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: Lanrith/lanrith/.github/workflows/prepare-workflow-updates.yml@ec7481231b31f7f0f98cfcad5d267b4e6fbf17f4
+    secrets: inherit

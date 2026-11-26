@@ -1,11 +1,11 @@
 {
-  "authorization_record_sha256": "87b59c71a6f8475212c0fbd55e88c1ddc564e776219c19fd412d8937020030ff",
-  "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-43302006969-1",
-  "release_authorization": "maintainer-merge",
+  "authorization_record_sha256": "9efdd2ca926dbe0322eb0b06e8852a3a8efd75ec21d8e561392798f399f3ddff",
+  "publication_audit": "https://github.com/Lanrith/lanrith/releases/tag/audit-publication-45735890847-1",
+  "release_authorization": "independent-review",
   "repository": "Lanrith/lanrith",
-  "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261113T071618Z-35d809773d2e",
+  "retained_assessment": "https://github.com/Lanrith/lanrith/releases/tag/assessment-20261126T042531Z-1d5019df35fb",
   "schema": 2,
-  "source_commit": "db92907635ac1d466401aaea9c5bebcb8b5995b6",
-  "verification_record_sha256": "1f89e486091fd6665ce64860905155e571b106b1a79fc3d4a260fdfc083c5e1d",
-  "version": "v0.1.21"
+  "source_commit": "ec7481231b31f7f0f98cfcad5d267b4e6fbf17f4",
+  "verification_record_sha256": "1ca8913d2176cf54cc6399580d399d8c44156ed7446c4affb8818a4646833515",
+  "version": "v0.1.32"
 }

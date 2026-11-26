@@ -35,6 +35,8 @@ var maintenanceWorkflows = []maintenanceWorkflow{
 	{path: ".github/workflows/security-review.yml", callee: "security-review.yml"},
 	{path: ".github/workflows/cleanup-artifacts.yml", callee: "cleanup-artifacts.yml"},
 	{path: ".github/workflows/request-human-review.yml", callee: "request-human-review.yml"},
+	{path: ".github/workflows/maintenance-reconcile.yml", callee: "maintenance-reconcile.yml"},
+	{path: ".github/workflows/prepare-workflow-updates.yml", callee: "prepare-workflow-updates.yml"},
 }
 
 // This contract catches partial deployments. Release signatures and source
