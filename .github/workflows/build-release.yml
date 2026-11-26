@@ -95,6 +95,7 @@ jobs:
       id-token: write
       attestations: write
     uses: Lanrith/lanrith/.github/workflows/publish-release.yml@ec7481231b31f7f0f98cfcad5d267b4e6fbf17f4
+    secrets: inherit
     with:
       artifact-id: ${{ needs.attest.outputs.artifact-id }}
       version: ${{ inputs.version }}

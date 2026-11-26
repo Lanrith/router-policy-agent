@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "date": "2026-11-26",
+  "repository": "Lanrith/router-policy-agent",
+  "requires_human": true,
+  "reason": "Router v0.1.16 published and archived successfully, but its platform wake-up job received an empty App private key because both nested release callers omitted secret forwarding. Discovery has the same caller chain.",
+  "failed_run": "https://github.com/Lanrith/router-policy-agent/actions/runs/45796319378",
+  "failed_job": "https://github.com/Lanrith/router-policy-agent/actions/runs/45796319378/job/139836175787",
+  "publication": "https://github.com/Lanrith/router-policy-agent/releases/tag/v0.1.16",
+  "publication_audit": "https://github.com/Lanrith/router-policy-agent/releases/tag/audit-publication-45796319378-1",
+  "reference": "https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows",
+  "changes": [
+    "Forward secrets through release -> build-release -> publish-release.",
+    "Keep the updater key in the protected lanrith-updates environment, used by the isolated signal-platform job after verified publication.",
+    "Reject a broken nested secret-forwarding chain during maintenance preflight before expensive builds."
+  ],
+  "validation": [
+    "Local maintenance preflight and Go contracts.",
+    "Mutation checks remove each forwarding edge separately and require preflight rejection.",
+    "Actionlint and full current-head hosted CI.",
+    "After the protected merge, verify immutable publication and successful platform wake-up in the real release."
+  ],
+  "approval": "Independent current-head human approval after all builds pass. This record grants no approval."
+}
