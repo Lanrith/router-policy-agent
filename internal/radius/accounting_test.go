@@ -196,8 +196,8 @@ func TestReplayRoamingAndDelayedOlderDuration(t *testing.T) {
 func TestReplayRejectsSourceSchemaAndTimingFailures(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"boot", "uid", "unit", "identifier", "future receipt", "journal clock", "nas", "nas claim",
-		"session hex", "session limit", "port hex", "missing delay", "delay overflow", "delay beyond receipt",
-		"missing duration", "ambiguous timestamp", "conflicting timestamp", "unsupported status", "vlan", "mapped ip", "field limit", "unknown field", "duplicate key"} {
+		"session hex", "session limit", "port hex", "delay overflow", "delay beyond receipt",
+		"ambiguous timestamp", "conflicting timestamp", "unsupported status", "vlan", "mapped ip", "field limit", "unknown field", "duplicate key"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			event := fixtureEvent("Interim-Update", 60)
@@ -214,14 +214,10 @@ func TestReplayRejectsSourceSchemaAndTimingFailures(t *testing.T) {
 				event.SessionIDHex = strings.Repeat("ff", 129)
 			case "port hex":
 				event.NASPortIDHex = "odd"
-			case "missing delay":
-				event.DelaySeconds = ""
 			case "delay overflow":
 				event.DelaySeconds = "4294967296"
 			case "delay beyond receipt":
 				event.DelaySeconds = "1760000060"
-			case "missing duration":
-				event.SessionSeconds = ""
 			case "ambiguous timestamp":
 				event.EventTime = "Oct 09 2025 08:54:20 BST"
 			case "conflicting timestamp":

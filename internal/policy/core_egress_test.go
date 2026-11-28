@@ -104,6 +104,50 @@ func TestCoreEgressRejectsAmbiguousOrUnboundedDependencies(t *testing.T) {
 	}
 }
 
+func TestDNSForwarderDestinations(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		targets []string
+		valid   bool
+	}{
+		{"iterative", []string{"0.0.0.0/0"}, true},
+		{"forward only", []string{"10.250.13.53/32", "10.251.13.53/32"}, true},
+		{"mixed", []string{"10.250.13.53/32", "0.0.0.0/0"}, false},
+		{"subnet", []string{"192.0.2.0/24"}, false},
+		{"wrong family", []string{"2001:db8::53/128"}, false},
+		{"client allocation", []string{"10.240.3.10/32"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := coreEgressBaseline(t)
+			b.NetworkModel.CoreEgress[0].Destinations = prefixes(tc.targets...)
+			raw, err := json.Marshal(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = DecodeBaseline(raw)
+			if (err == nil) != tc.valid {
+				t.Errorf("valid = %t, expected %t, err = %v", err == nil, tc.valid, err)
+			}
+		})
+	}
+}
+
+func TestTLSResolverRequiresExactDestinations(t *testing.T) {
+	t.Parallel()
+	b := coreEgressBaseline(t)
+	path := &b.NetworkModel.CoreEgress[0]
+	path.Kind = "dns_tls"
+	path.Destinations = prefixes("10.250.13.53/32")
+	if err := validateCoreEgress(b, map[string]bool{"wan": true, "lan13": true}); err != nil {
+		t.Fatal(err)
+	}
+	path.Destinations = prefixes("0.0.0.0/0")
+	if err := validateCoreEgress(b, map[string]bool{"wan": true, "lan13": true}); err == nil {
+		t.Fatal("unbounded TLS resolver")
+	}
+}
+
 func TestCoreEgressDynamicAddressingIsRepresentableWithoutInventingAnAddress(t *testing.T) {
 	t.Parallel()
 	b := coreEgressBaseline(t)

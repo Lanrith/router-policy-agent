@@ -14,7 +14,7 @@ import (
 )
 
 const refreshInterval = 30 * time.Second
-const cycleTimeout = 10 * time.Second
+const collectionTimeout = 10 * time.Second
 
 var errRuntime = errors.New("reader: runtime unavailable")
 
@@ -68,24 +68,29 @@ func runLoop(ctx context.Context, collect collectFunc, submit submitFunc, diagno
 }
 
 func runCycle(ctx context.Context, collect collectFunc, submit submitFunc) (attempt, error) {
-	bounded, cancel := context.WithTimeout(ctx, cycleTimeout)
+	cycle, cancel := context.WithTimeout(ctx, collectionTimeout+ipc.MaximumSubmissionTimeout)
 	defer cancel()
 	result := attempt{SchemaVersion: 1, Outcome: "collection_failed"}
-	snapshot, err := collect(bounded)
+	collection, stopCollection := context.WithTimeout(cycle, collectionTimeout)
+	snapshot, err := collect(collection)
+	collectionErr := collection.Err()
+	stopCollection()
 	if ctx.Err() != nil {
 		return attempt{}, ctx.Err()
 	}
-	if err != nil || bounded.Err() != nil {
+	if err != nil || collectionErr != nil {
 		return result, nil
 	}
 	// Keep the collector's observation time intact. The helper independently
 	// checks completeness, freshness, replay, bindings and its protected floor.
-	receipt, err := submit(bounded, snapshot)
+	submission, stopSubmission := context.WithTimeout(cycle, ipc.MaximumSubmissionTimeout)
+	defer stopSubmission()
+	receipt, err := submit(submission, snapshot)
 	if ctx.Err() != nil {
 		return attempt{}, ctx.Err()
 	}
 	result.Outcome = "submission_failed"
-	if bounded.Err() != nil {
+	if submission.Err() != nil {
 		return result, nil
 	}
 	if errors.Is(err, ipc.ErrRejected) {

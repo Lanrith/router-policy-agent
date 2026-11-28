@@ -285,6 +285,8 @@ func coreServiceInterfaces(b policy.Baseline) []string {
 
 func nativeCoreTransport(kind string) ([]string, []uint16) {
 	switch kind {
+	case "dns_tls":
+		return []string{"tcp"}, []uint16{853}
 	case "ntp":
 		return []string{"udp"}, []uint16{123}
 	case "metrics":

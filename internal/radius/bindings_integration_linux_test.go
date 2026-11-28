@@ -32,8 +32,8 @@ func TestNativeBindingPublisherInvalidatesAndLoadsWithoutShadow(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := publishBindings(t.Context(), root, options, func(context.Context) (Collection, error) {
-				if _, err := binding.Load(t.Context(), directory); !errors.Is(err, binding.ErrIncomplete) {
-					t.Fatal("source collection must publish the loader's explicit deny-only boundary", err)
+				if snapshot, err := binding.Load(t.Context(), directory); err != nil || snapshot.Generation != "previous" {
+					t.Fatal("staging interrupted the prior snapshot", err)
 				}
 				if test.fail {
 					return Collection{}, errors.New("synthetic source failure")

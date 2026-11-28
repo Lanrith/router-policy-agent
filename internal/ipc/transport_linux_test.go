@@ -204,6 +204,28 @@ func TestSubmit(t *testing.T) {
 	}
 }
 
+func TestProposalTimeoutLimits(t *testing.T) {
+	t.Parallel()
+	listener, client := testListener(t)
+	var calls atomic.Int32
+	process := func(context.Context, policy.DirectorySnapshot) (Receipt, error) {
+		calls.Add(1)
+		return fixtureReceipt(), nil
+	}
+	if _, err := NewServer(ServerOptions{ReaderUID: client.ServerUID, Timeout: 10*time.Second + time.Nanosecond}, process); err == nil {
+		t.Fatal("client delivery allowance extended the helper processing limit")
+	}
+	startServer(t, listener, client.ServerUID, process)
+	client.Timeout = MaximumSubmissionTimeout
+	if receipt, err := Submit(t.Context(), client, fixtureSnapshot()); err != nil || receipt.Status != StatusShadow {
+		t.Fatal("bounded submission failed", err)
+	}
+	client.Timeout += time.Nanosecond
+	if _, err := Submit(t.Context(), client, fixtureSnapshot()); err == nil || calls.Load() != 1 {
+		t.Fatal("submission exceeded its maximum deadline")
+	}
+}
+
 func TestUIDAndSchemaBoundary(t *testing.T) {
 	t.Parallel()
 	t.Run("wrong reader uid", func(t *testing.T) {

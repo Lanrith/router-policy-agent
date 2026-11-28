@@ -24,8 +24,8 @@ type BindingPublisherOptions struct {
 
 // PublishBindingsIPv4 collects fresh native evidence and atomically publishes
 // bindings.json. It never reads or promotes a shadow report. Only guarded DHCP
-// placement is admitted; original association, ownership and expiry times are
-// retained. Source failure leaves an incomplete export, not the last success.
+// placement is admitted. Original association, ownership and expiry times are
+// retained. A failed scan replaces the last complete generation with a withdrawal.
 // This function installs no firewall rules and confers no directory permission.
 func PublishBindingsIPv4(ctx context.Context, options BindingPublisherOptions) (Collection, error) {
 	if ctx == nil || os.Getuid() != 0 || os.Geteuid() != 0 || !validBindingPublisher(options) {
@@ -34,7 +34,8 @@ func PublishBindingsIPv4(ctx context.Context, options BindingPublisherOptions) (
 	options.ManagedMACs = slices.Clone(options.ManagedMACs)
 	return withExportRoot(ctx, options.Directory, func(root *os.Root) (Collection, error) {
 		return publishBindings(ctx, root, options, func(ctx context.Context) (Collection, error) {
-			return CollectIPv4(ctx, options.Collector)
+			options.Collector.managedMACs = options.ManagedMACs
+			return collectBindingSources(ctx, root, 0, options.Collector)
 		})
 	})
 }
@@ -70,31 +71,20 @@ func publishBindings(
 	if ctx == nil || root == nil || collect == nil || !validBindingPublisher(options) {
 		return Collection{}, errors.New("radius: incomplete binding publisher inputs")
 	}
-	// This timestamp describes invalidation, not source evidence. The loader
-	// returns ErrIncomplete for this envelope; it cannot refresh ownership or
-	// grant deadlines. Keep the metadata valid so a stalled read remains the
-	// explicit deny-only state rather than a malformed-export startup failure.
-	invalidatedAt := time.Now().UTC()
-	incomplete := binding.Snapshot{
-		SchemaVersion: 1,
-		Generation:    digest("collector-incomplete", invalidatedAt.Format(time.RFC3339Nano)),
-		ObservedAt:    invalidatedAt,
-		Complete:      false,
-		Records:       []binding.Record{},
-	}
-	if err := writeBindings(ctx, root, incomplete); err != nil {
-		return Collection{}, err
-	}
 	collected, err := collect(ctx)
-	if err != nil {
-		return Collection{}, err
+	var snapshot binding.Snapshot
+	if err == nil {
+		snapshot, err = collectedBindings(collected, options, time.Now().UTC())
 	}
-	snapshot, err := collectedBindings(collected, options, time.Now().UTC())
-	if err != nil {
-		return Collection{}, err
+	if err == nil {
+		err = writeBindings(ctx, root, snapshot)
 	}
-	if err := writeBindings(ctx, root, snapshot); err != nil {
-		return Collection{}, err
+	if err != nil {
+		now := time.Now().UTC()
+		incomplete := binding.Snapshot{SchemaVersion: 1, Generation: digest("collector-incomplete", now.Format(time.RFC3339Nano)), ObservedAt: now, Records: []binding.Record{}}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		return Collection{}, errors.Join(err, writeBindings(cleanup, root, incomplete))
 	}
 	return collected, nil
 }

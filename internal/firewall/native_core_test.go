@@ -108,3 +108,20 @@ func TestNativeCoreRequiresExactMasqueradeSources(t *testing.T) {
 		t.Fatal("caller mutation changed native dependency", err)
 	}
 }
+
+func TestDNSForwardingTransports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind      string
+		protocols []string
+		port      uint16
+	}{
+		{"dns", []string{"tcp", "udp"}, 53},
+		{"dns_tls", []string{"tcp"}, 853},
+	} {
+		protocols, ports := nativeCoreTransport(tc.kind)
+		if !slices.Equal(protocols, tc.protocols) || !slices.Equal(ports, []uint16{tc.port}) {
+			t.Errorf("%s has protocols %v, ports %v", tc.kind, protocols, ports)
+		}
+	}
+}

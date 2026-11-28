@@ -14,10 +14,9 @@ import (
 	"github.com/lanrith/router-policy-agent/internal/reader"
 )
 
-// RunReader starts the non-root fresh-collection loop; only help/version write
-// stdout. Fixed JSON runtime outcomes go to stderr. Exit codes are 0 for help,
-// version or orderly cancellation, 1 for runtime failure and 2 for usage errors.
-// It does not install/start a helper, qualify sources or authorize deployment.
+// RunReader starts the non-root reader or qualifies one synthetic provider stage.
+// The polling loop emits bounded outcomes on stderr. The provider check emits its
+// one outcome on stdout and exits successfully only on the expected applied receipt.
 func RunReader(ctx context.Context, args []string, streams CheckIO) int {
 	return runReader(ctx, args, streams, reader.Run)
 }
@@ -29,6 +28,7 @@ func runReader(ctx context.Context, args []string, streams CheckIO, run readerFu
 		return 2
 	}
 	var directory string
+	var check string
 	var version bool
 	var messages bytes.Buffer
 	flags := flag.NewFlagSet("router-policy-reader", flag.ContinueOnError)
@@ -39,10 +39,19 @@ func runReader(ctx context.Context, args []string, streams CheckIO, run readerFu
 		"",
 		"private reader-owned directory with reader.json and runtime credentials.json (required)",
 	)
+	flags.Func("check-provider", "qualify one synthetic provider stage (single-page, multi-page, or withdrawn)", func(stage string) error {
+		switch stage {
+		case "single-page", "multi-page", "withdrawn":
+			check = stage
+			return nil
+		default:
+			return errors.New("unknown provider check stage")
+		}
+	})
 	flags.BoolVar(&version, "version", false, "print build version")
 	flags.Usage = func() {
 		fmt.Fprintln(&messages, "Collect fresh LDAPS snapshots and submit to the root helper as a non-root reader.")
-		fmt.Fprintln(&messages, "Usage: router-policy-reader -config-directory PATH")
+		fmt.Fprintln(&messages, "Usage: router-policy-reader -config-directory PATH [-check-provider STAGE]")
 		fmt.Fprintln(&messages, "Polls every 30s; one 10s collection/submission deadline; never replays a failed snapshot.")
 		flags.PrintDefaults()
 	}
@@ -68,6 +77,12 @@ func runReader(ctx context.Context, args []string, streams CheckIO, run readerFu
 	isBounded := len(directory) <= 4096 && strings.IndexFunc(directory, unicode.IsControl) < 0
 	if !isClean || !isBounded {
 		return readerDiagnostic(streams.Err, "valid -config-directory required", 2)
+	}
+	if check != "" {
+		if err := reader.CheckProvider(ctx, directory, streams.Out, check); err != nil {
+			return readerDiagnostic(streams.Err, "provider check failed", 1)
+		}
+		return 0
 	}
 	err := run(ctx, directory, streams.Err)
 	if err == nil || errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) {

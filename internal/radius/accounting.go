@@ -44,9 +44,10 @@ type Scope struct {
 // Withheld counts MACs with conflicting current sessions, including roaming.
 // ObservedAt is the caller's collection time, not a session heartbeat.
 type Observation struct {
-	ObservedAt time.Time
-	Sessions   []Session
-	Withheld   int
+	ObservedAt     time.Time
+	Sessions       []Session
+	Withheld       int
+	DuplicateClaim bool
 }
 
 // Session retains original accounting times and an opaque boot-scoped identity.
@@ -85,25 +86,29 @@ type accountingEvent struct {
 }
 
 type event struct {
-	mac       string
-	nas       netip.Addr
-	key       string
-	status    string
-	original  time.Time
-	journalAt time.Time
-	duration  uint64
-	ip        netip.Addr
-	vlan      uint16
-	port      string
-	ipv6      bool
+	UnknownAge   bool
+	WallOriginal time.Time
+	MAC          string
+	NAS          netip.Addr
+	Key          string
+	Status       string
+	Original     time.Time
+	JournalAt    time.Time
+	Duration     uint64
+	IP           netip.Addr
+	VLAN         uint16
+	Port         string
+	IPv6         bool
 }
 
 type sessionState struct {
-	first    event
-	last     event
-	started  bool
-	closed   bool
-	conflict bool
+	Uncertain event
+	Negative  map[netip.Addr]time.Time
+	First     event
+	Last      event
+	Started   bool
+	Closed    bool
+	Conflict  bool
 }
 
 // Replay consumes a bounded, chronological journal JSON capture, preserving
@@ -131,24 +136,30 @@ func Replay(data []byte, scope Scope, now time.Time) (Observation, error) {
 		if err != nil {
 			return Observation{}, err
 		}
-		if item.journalAt.Before(previous) {
+		if item.JournalAt.Before(previous) {
 			return Observation{}, errors.New("radius: journal clock or order conflict")
 		}
-		previous = item.journalAt
-		state, exists := states[item.key]
-		if !exists {
-			if len(states) >= maximumSessions {
-				return Observation{}, errors.New("radius: session limit exceeded")
-			}
-			state = &sessionState{first: item, last: item}
-			states[item.key] = state
+		previous = item.JournalAt
+		if err := accumulate(states, item); err != nil {
+			return Observation{}, err
 		}
-		if state.first.mac != item.mac {
-			return Observation{}, errors.New("radius: session identity has conflicting owners")
-		}
-		state.apply(item)
 	}
 	return current(states, now), nil
+}
+
+func accumulate(states map[string]*sessionState, item event) error {
+	state, exists := states[item.Key]
+	if !exists {
+		if len(states) >= maximumSessions {
+			return errors.New("radius: session limit exceeded")
+		}
+		state = &sessionState{First: item, Last: item}
+		states[item.Key] = state
+	}
+	if state.First.MAC != item.MAC {
+		return errors.New("radius: session identity has conflicting owners")
+	}
+	return state.apply(item)
 }
 
 func validScope(scope Scope) bool {
@@ -207,7 +218,7 @@ func decodeEntry(data []byte, scope Scope, now time.Time) (event, error) {
 	if journalAt.Before(receipt) || journalAt.After(receipt.Add(10*time.Second)) || journalAt.After(now) {
 		return event{}, errors.New("radius: journal receipt clock conflict")
 	}
-	item.journalAt = journalAt
+	item.JournalAt = journalAt
 	return item, nil
 }
 
@@ -238,12 +249,16 @@ func normalize(raw accountingEvent, scope Scope, now time.Time) (event, error) {
 	if raw.Status != "Start" && raw.Status != "Stop" && raw.Status != "Alive" && raw.Status != "Interim-Update" {
 		return event{}, errors.New("radius: unsupported accounting status")
 	}
-	delay, err := unsigned(raw.DelaySeconds, 0xffffffff)
+	delayText := raw.DelaySeconds
+	if delayText == "" {
+		delayText = "0"
+	} // Used only for the conservative denial window.
+	delay, err := unsigned(delayText, 0xffffffff)
 	if err != nil {
 		return event{}, err
 	}
 	durationText := raw.SessionSeconds
-	if durationText == "" && raw.Status == "Start" {
+	if durationText == "" {
 		durationText = "0"
 	}
 	duration, err := unsigned(durationText, 0xffffffff)
@@ -254,7 +269,7 @@ func normalize(raw accountingEvent, scope Scope, now time.Time) (event, error) {
 		return event{}, errors.New("radius: invalid accounting receipt or delay")
 	}
 	original := time.Unix(raw.ReceivedAt-int64(delay), 0).UTC() // delay < positive int64 receipt.
-	if raw.EventTime != "" {
+	if raw.EventTime != "" && raw.DelaySeconds != "" {
 		stamp, err := eventTime(raw.EventTime)
 		if err != nil || stamp.After(time.Unix(raw.ReceivedAt, 0)) || !near(stamp, original) {
 			return event{}, errors.New("radius: inconsistent event timestamp")
@@ -275,83 +290,147 @@ func normalize(raw accountingEvent, scope Scope, now time.Time) (event, error) {
 		return event{}, err
 	}
 	return event{
-		mac: mac, nas: nas, key: digest(scope.BootID, nas.String(), hex.EncodeToString(sessionID)),
-		status: raw.Status, original: original, duration: duration, ip: ip, vlan: vlan,
-		port: digest(raw.NASPort, raw.NASPortType, hex.EncodeToString(portID)),
-		ipv6: raw.IPv6Addresses != "" || raw.IPv6Prefixes != "" || raw.InterfaceID != "",
+		UnknownAge:   raw.DelaySeconds == "" || raw.SessionSeconds == "" && raw.Status != "Start",
+		WallOriginal: original, MAC: mac, NAS: nas,
+		Key:    digest(scope.BootID, nas.String(), hex.EncodeToString(sessionID)),
+		Status: raw.Status, Original: original, Duration: duration, IP: ip, VLAN: vlan,
+		Port: digest(raw.NASPort, raw.NASPortType, hex.EncodeToString(portID)),
+		IPv6: raw.IPv6Addresses != "" || raw.IPv6Prefixes != "" || raw.InterfaceID != "",
 	}, nil
 }
 
 // apply never removes a tombstone. Newer durations remain anchored to the
 // original Start, so a delayed duplicate cannot become a new heartbeat.
-func (state *sessionState) apply(item event) {
-	if item.status == "Stop" {
-		state.closed = true
+func (state *sessionState) apply(item event) error {
+	state.applyEvent(item)
+	if state.Closed || !state.Conflict && state.Uncertain.Original.IsZero() {
+		state.Negative = nil
+		return nil
+	}
+	for address, until := range state.Negative {
+		if !item.Original.Before(until) {
+			delete(state.Negative, address)
+		}
+	}
+	if item.IP.IsValid() {
+		if state.Negative == nil {
+			state.Negative = make(map[netip.Addr]time.Time)
+		}
+		until := item.Original.Add(Freshness)
+		if until.After(state.Negative[item.IP]) {
+			state.Negative[item.IP] = until
+		}
+	}
+	if len(state.Negative) > 16 {
+		return errBudget
+	}
+	return nil
+}
+
+func (state *sessionState) applyEvent(item event) {
+	if item.Status == "Stop" {
+		state.Closed = true
 		return
 	}
-	if state.closed {
+	if state.Closed {
 		return
 	}
-	if item.status == "Start" {
+	if item.UnknownAge {
+		state.Uncertain = item
+		return
+	}
+	if item.Status == "Start" {
 		switch {
-		case item.duration != 0:
-			state.conflict = true
-		case !state.started:
-			state.first, state.last, state.started = item, item, true
-		case item.original != state.first.original || !samePlacement(item, state.first):
-			state.conflict = true
+		case item.Duration != 0:
+			state.Conflict = true
+		case !state.Started:
+			state.First, state.Last, state.Started = item, item, true
+			if !state.Uncertain.Original.After(item.Original) {
+				state.Uncertain = event{}
+			}
+		case !item.WallOriginal.Equal(state.First.WallOriginal) || !near(item.Original, state.First.Original) || !samePlacement(item, state.First):
+			state.Conflict = true
 		}
 		return
 	}
-	if !state.started {
-		state.conflict = true
-		state.last = item
+	if !state.Started {
+		state.Conflict = true
+		state.Last = item
 		return
 	}
-	if item.duration < state.last.duration {
+	if item.Duration < state.Last.Duration {
 		return
 	}
-	if item.duration == state.last.duration {
-		if !samePlacement(item, state.last) {
-			state.conflict = true
+	if item.Duration == state.Last.Duration {
+		if !samePlacement(item, state.Last) {
+			state.Conflict = true
 		}
 		return
 	}
-	if item.duration > uint64(math.MaxInt64/int64(time.Second)) {
-		state.conflict = true
+	if item.Duration > uint64(math.MaxInt64/int64(time.Second)) {
+		state.Conflict = true
 		return
 	}
-	anchored := state.first.original.Add(time.Duration(item.duration) * time.Second)
-	if !near(anchored, item.original) || item.port != state.first.port || item.vlan != state.last.vlan {
-		state.conflict = true
+	anchored := state.First.Original.Add(time.Duration(item.Duration) * time.Second)
+	if !near(anchored, item.Original) || item.Port != state.First.Port || item.VLAN != state.Last.VLAN {
+		state.Conflict = true
 		return
 	}
-	if anchored.Before(item.original) {
-		item.original = anchored
+	if anchored.Before(item.Original) {
+		item.Original = anchored
 	}
-	state.last = item
+	state.Last = item
+	if !state.Uncertain.Original.After(item.Original) {
+		state.Uncertain = event{}
+	}
 }
 
 func current(states map[string]*sessionState, now time.Time) Observation {
 	byMAC := make(map[string][]*sessionState)
+	claims := make(map[netip.Addr]string)
+	conflicted := make(map[netip.Addr]bool)
+	claim := func(address netip.Addr, mac string) {
+		if owner, seen := claims[address]; seen && owner != mac {
+			conflicted[address] = true
+		}
+		claims[address] = mac
+	}
 	for _, state := range states {
-		if !state.closed && !state.last.original.After(now) && now.Before(state.last.original.Add(Freshness)) {
-			byMAC[state.first.mac] = append(byMAC[state.first.mac], state)
+		if state.Closed {
+			continue
+		}
+		if evidence := state.Last; evidence.IP.IsValid() && now.Before(evidence.Original.Add(Freshness)) {
+			claim(evidence.IP, evidence.MAC)
+		}
+		negative := false
+		for address, until := range state.Negative {
+			if now.Before(until) {
+				claim(address, state.First.MAC)
+				negative = true
+			}
+		}
+		if negative || now.Before(state.Uncertain.Original.Add(Freshness)) {
+			byMAC[state.First.MAC] = append(byMAC[state.First.MAC], state)
+			continue
+		}
+		if !state.Last.Original.After(now) && now.Before(state.Last.Original.Add(Freshness)) {
+			byMAC[state.First.MAC] = append(byMAC[state.First.MAC], state)
 		}
 	}
-	result := Observation{ObservedAt: now, Sessions: []Session{}}
+	result := Observation{ObservedAt: now, Sessions: []Session{}, DuplicateClaim: len(conflicted) > 0}
 	for mac, active := range byMAC {
-		if len(active) != 1 || active[0].conflict || !active[0].started {
+		if len(active) != 1 || active[0].Conflict || !active[0].Started || conflicted[active[0].Last.IP] ||
+			now.Before(active[0].Uncertain.Original.Add(Freshness)) {
 			result.Withheld++
 			continue
 		}
 		state := active[0]
 		result.Sessions = append(result.Sessions, Session{
-			MAC: mac, NAS: state.last.nas,
-			AssociationID: digest(state.first.key, strconv.FormatInt(state.first.original.Unix(), 10)),
-			StartedAt:     state.first.original, ObservedAt: state.last.original,
-			ValidUntil: state.last.original.Add(Freshness), IPv4: state.last.ip,
-			ReportedVLAN: state.last.vlan, IPv6Reported: state.last.ipv6,
+			MAC: mac, NAS: state.Last.NAS,
+			AssociationID: digest(state.First.Key, strconv.FormatInt(state.First.Original.Unix(), 10)),
+			StartedAt:     state.First.Original, ObservedAt: state.Last.Original,
+			ValidUntil: state.Last.Original.Add(Freshness), IPv4: state.Last.IP,
+			ReportedVLAN: state.Last.VLAN, IPv6Reported: state.Last.IPv6,
 		})
 	}
 	slices.SortFunc(result.Sessions, func(a, b Session) int { return strings.Compare(a.MAC, b.MAC) })
@@ -359,7 +438,7 @@ func current(states map[string]*sessionState, now time.Time) Observation {
 }
 
 func samePlacement(a, b event) bool {
-	return a.ip == b.ip && a.vlan == b.vlan && a.port == b.port && a.ipv6 == b.ipv6
+	return a.IP == b.IP && a.VLAN == b.VLAN && a.Port == b.Port && a.IPv6 == b.IPv6
 }
 
 func unsigned(value string, maximum uint64) (uint64, error) {

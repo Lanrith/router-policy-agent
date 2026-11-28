@@ -91,7 +91,8 @@ func (r *Reader) pages(ctx context.Context, client searcher, unit string, maximu
 	seenEntries, cookies := map[string]bool{}, map[string]bool{}
 	page := ldap.NewControlPaging(r.config.PageSize)
 	// Empty intermediate pages are permitted, but cannot create an endless read.
-	for range maximum + 1 {
+	populatedPages := 0
+	for pageIndex := range maximum + 1 {
 		if err := ctx.Err(); err != nil {
 			return nil, readError(ctx)
 		}
@@ -111,8 +112,12 @@ func (r *Reader) pages(ctx context.Context, client searcher, unit string, maximu
 		if err != nil || response == nil || len(response.Referrals) != 0 {
 			return nil, ErrRead
 		}
-		if len(response.Entries) > maximum-len(result) {
+		if len(response.Entries) > maximum-len(result) ||
+			r.checkPages != ordinaryRead && len(response.Entries) > int(r.config.PageSize) {
 			return nil, ErrRead
+		}
+		if len(response.Entries) != 0 {
+			populatedPages++
 		}
 		for _, entry := range response.Entries {
 			if entry == nil {
@@ -137,6 +142,12 @@ func (r *Reader) pages(ctx context.Context, client searcher, unit string, maximu
 			return nil, ErrRead
 		}
 		if len(returned.Cookie) == 0 {
+			if r.checkPages == multiplePopulatedPages && populatedPages < 2 {
+				return nil, ErrRead
+			}
+			if r.checkPages == onePopulatedPage && (pageIndex != 0 || populatedPages != 1) {
+				return nil, ErrRead
+			}
 			return result, nil
 		}
 		cookie := string(returned.Cookie)
