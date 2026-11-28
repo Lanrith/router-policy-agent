@@ -26,7 +26,11 @@ func TestCheckpointAcrossBootCaptureLimitRestartAndClockStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	cp := newCheckpoint("scope-a")
 	const count = maximumEvents + 3
 	mono := time.Unix(1000+count, 0).UTC()
@@ -53,7 +57,10 @@ func TestCheckpointAcrossBootCaptureLimitRestartAndClockStep(t *testing.T) {
 	if len(before.Sessions) != 1 || before.Sessions[0].ValidUntil.After(now.Add(89*time.Second)) {
 		t.Fatalf("lost active session or renewed original evidence: %+v", before)
 	}
-	uid := uint32(os.Getuid())
+	uid, err := effectiveOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cp.save(t.Context(), root, uid); err != nil {
 		t.Fatal(err)
 	}
@@ -176,9 +183,16 @@ func TestCheckpointRejectsChangedStateAndForeignFileOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	cp := newCheckpoint("fixture")
-	uid := uint32(os.Getuid())
+	uid, err := effectiveOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cp.save(t.Context(), root, uid); err != nil {
 		t.Fatal(err)
 	}

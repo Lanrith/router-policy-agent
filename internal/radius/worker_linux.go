@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"syscall"
 	"time"
@@ -73,6 +74,14 @@ func ServeBindingEvidence(ctx context.Context, input *os.File, output io.Writer)
 	return json.NewEncoder(output).Encode(response)
 }
 
+func effectiveOwner() (uint32, error) {
+	uid := os.Geteuid()
+	if uid < 0 || uid > math.MaxUint32 {
+		return 0, errors.New("radius: invalid worker user ID")
+	}
+	return uint32(uid), nil
+}
+
 func collectWorker(ctx context.Context, data []byte) (binding.Snapshot, error) {
 	config, err := decodeBindingsRuntimeConfig(data)
 	if err != nil {
@@ -83,7 +92,10 @@ func collectWorker(ctx context.Context, data []byte) (binding.Snapshot, error) {
 		return binding.Snapshot{}, err
 	}
 	options.managedMACs = config.ManagedMACs
-	owner := uint32(os.Geteuid())
+	owner, err := effectiveOwner()
+	if err != nil {
+		return binding.Snapshot{}, err
+	}
 	collection, err := withOwnedExport(ctx, workerDirectory, owner, func(root *os.Root) (Collection, error) {
 		return collectBindingSources(ctx, root, owner, options)
 	})

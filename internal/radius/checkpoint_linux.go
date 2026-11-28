@@ -13,12 +13,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/lanrith/router-policy-agent/internal/hostfs"
 	"github.com/lanrith/router-policy-agent/internal/strictjson"
+	"golang.org/x/sys/unix"
 )
 
 const checkpointFile = "accounting-v1.json"
@@ -100,13 +99,19 @@ func (cp checkpoint) save(ctx context.Context, root *os.Root, owner uint32) erro
 }
 
 func monotonicNow() (time.Time, error) {
-	var stamp syscall.Timespec
-	const clockMonotonic = 1 // Linux CLOCK_MONOTONIC, as used by the system journal.
-	_, _, err := syscall.Syscall(syscall.SYS_CLOCK_GETTIME, clockMonotonic, uintptr(unsafe.Pointer(&stamp)), 0)
-	if err != 0 {
+	var stamp unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &stamp); err != nil {
 		return time.Time{}, err
 	}
 	return time.Unix(stamp.Sec, stamp.Nsec).UTC(), nil
+}
+
+func journalMicros(text string, maximum uint64) (int64, error) {
+	value, err := unsigned(text, maximum)
+	if err != nil || value > math.MaxInt64 {
+		return 0, errAccounting
+	}
+	return int64(value), nil
 }
 
 func (cp *checkpoint) advance(data []byte, scope Scope, mono time.Time, discard bool) error {
@@ -120,39 +125,39 @@ func (cp *checkpoint) advance(data []byte, scope Scope, mono time.Time, discard 
 		if json.Unmarshal(line, &stamp) != nil || len(stamp.Cursor) == 0 || len(stamp.Cursor) > 2048 || strings.ContainsAny(stamp.Cursor, "\r\n\x00") {
 			return errAccounting
 		}
-		us, err := unsigned(stamp.Mono, uint64(math.MaxInt64/int64(time.Microsecond)))
-		if err != nil || int64(us) > mono.UnixMicro() {
+		us, err := journalMicros(stamp.Mono, uint64(math.MaxInt64/int64(time.Microsecond)))
+		if err != nil || us > mono.UnixMicro() {
 			return errAccounting
 		}
-		receipt, err := unsigned(stamp.Wall, 9999999999999999)
+		receipt, err := journalMicros(stamp.Wall, 9999999999999999)
 		if err != nil {
 			return errAccounting
 		}
 		hash := digest(string(line))
 		if first && cp.Cursor != "" {
-			if stamp.Cursor != cp.Cursor || hash != cp.Anchor || int64(us) != cp.Monotonic {
+			if stamp.Cursor != cp.Cursor || hash != cp.Anchor || us != cp.Monotonic {
 				return errGap
 			}
 			first = false
 			continue
 		}
 		first = false
-		if int64(us) < cp.Monotonic || cp.Cursor == stamp.Cursor {
+		if us < cp.Monotonic || cp.Cursor == stamp.Cursor {
 			return errGap
 		}
-		wall := time.UnixMicro(int64(receipt)).UTC()
+		wall := time.UnixMicro(receipt).UTC()
 		item, err := decodeEntry(bytes.TrimSpace(line), scope, wall)
 		if err != nil {
 			return err
 		}
 		if !discard {
-			item.Original = time.UnixMicro(int64(us)).UTC().Add(-wall.Sub(item.Original))
+			item.Original = time.UnixMicro(us).UTC().Add(-wall.Sub(item.Original))
 			if err := cp.apply(item, mono); err != nil {
 				return err
 			}
 		}
 
-		cp.Cursor, cp.Anchor, cp.Monotonic = stamp.Cursor, hash, int64(us)
+		cp.Cursor, cp.Anchor, cp.Monotonic = stamp.Cursor, hash, us
 	}
 	if first && cp.Cursor != "" {
 		return errGap
