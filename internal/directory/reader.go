@@ -1,4 +1,4 @@
-// Package directory collects original Authentik entries over explicit transports.
+// Package directory collects original LDAP entries over explicit transports.
 // It neither supplies network bindings nor authenticates a NAS session.
 package directory
 
@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,8 @@ var ErrRead = errors.New("directory: collection failed")
 type Config struct {
 	URL            string
 	BaseDN         string
+	SearchMode     string
+	Mapping        *Mapping
 	RootCAs        *x509.CertPool
 	Timeout        time.Duration
 	PageSize       uint32
@@ -51,11 +54,13 @@ const (
 	ordinaryRead pageRequirement = iota
 	onePopulatedPage
 	multiplePopulatedPages
+	ordinaryFixture
 )
 
 // Reader owns immutable connection configuration, but caches no directory data.
 // Concurrent collections use separate bounded connections and snapshots.
 type Reader struct {
+	mapping     Mapping
 	checkPages  pageRequirement
 	config      Config
 	address     string
@@ -68,6 +73,30 @@ type Reader struct {
 // credentials must provide the separately authorized scoped read identity and
 // honor cancellation. It must be safe for concurrent use if the Reader is shared.
 func New(config Config, credentials func(context.Context) (Credentials, error)) (*Reader, error) {
+	if credentials == nil {
+		return nil, errors.New("directory: missing credential source")
+	}
+	reader, err := prepare(config)
+	if err != nil {
+		return nil, err
+	}
+	reader.credentials = credentials
+	return reader, nil
+}
+
+// CheckConfig runs the same static checks as New and optionally validates the
+// lookup identity against the selected namespace. No credentials or I/O are used.
+func CheckConfig(config Config, bindDN *string) error {
+	if _, err := prepare(config); err != nil {
+		return err
+	}
+	if bindDN != nil && !validBindDN(*bindDN, config.BaseDN, config.Mapping != nil) {
+		return errors.New("directory: invalid bind identity")
+	}
+	return nil
+}
+
+func prepare(config Config) (*Reader, error) {
 	endpoint, err := url.Parse(config.URL)
 	if err != nil || endpoint == nil {
 		return nil, errors.New("directory: invalid endpoint")
@@ -83,21 +112,35 @@ func New(config Config, credentials func(context.Context) (Credentials, error)) 
 	if !validTransport(config, endpoint.Scheme, host, time.Now().UTC()) {
 		return nil, errors.New("directory: invalid or expired transport policy")
 	}
-	base, parseErr := ldap.ParseDN(config.BaseDN)
-	isBadNamespace := parseErr != nil || base == nil || len(base.RDNs) == 0 || len(config.BaseDN) > 1024
+	base, validBase := parseConfigDN(config.BaseDN, 1024)
 	isBadTimeout := config.Timeout <= 0 || config.Timeout > 10*time.Second
 	isBadCapacity := config.MaximumDevices <= 0 || config.MaximumDevices > 4096 ||
 		config.MaximumGroups <= 0 || config.MaximumGroups > 8192
 	isBadPaging := config.PageSize == 0 || config.PageSize > 256
-	if credentials == nil || isBadNamespace || isBadTimeout || isBadCapacity || isBadPaging {
+	if !validBase || isBadTimeout || isBadCapacity || isBadPaging {
 		return nil, errors.New("directory: invalid namespace, timing or collection limits")
+	}
+	switch config.SearchMode {
+	case "", "auto":
+		config.SearchMode = "auto"
+	case "paged", "unpaged":
+	default:
+		return nil, errors.New("directory: unknown search mode")
+	}
+	mapping := defaultMapping(config.BaseDN)
+	if config.Mapping != nil {
+		mapping = *config.Mapping
+		if !mapping.valid(base) {
+			return nil, errors.New("directory: invalid LDAP mapping")
+		}
+		config.Mapping = &mapping
 	}
 	if config.RootCAs != nil {
 		config.RootCAs = config.RootCAs.Clone()
 	}
 	return &Reader{
-		config: config, address: endpoint.Host, hostname: host,
-		credentials: credentials, now: time.Now,
+		config: config, mapping: mapping, address: endpoint.Host, hostname: host,
+		now: time.Now,
 	}, nil
 }
 
@@ -125,12 +168,31 @@ func (r *Reader) CheckProvider(ctx context.Context, multiplePages bool) (policy.
 		return policy.DirectorySnapshot{}, ErrRead
 	}
 	check := *r
+	check.config.SearchMode = "paged"
 	check.checkPages = onePopulatedPage
 	if multiplePages {
 		check.checkPages = multiplePopulatedPages
 		check.config.PageSize = 1
 	}
 	return check.Collect(ctx)
+}
+
+// CheckUnpaged qualifies a complete control-free search over verified TLS.
+func (r *Reader) CheckUnpaged(ctx context.Context) (policy.DirectorySnapshot, error) {
+	if r == nil || !r.config.PlaintextUntil.IsZero() {
+		return policy.DirectorySnapshot{}, ErrRead
+	}
+	check := *r
+	check.config.SearchMode = "unpaged"
+	check.checkPages = ordinaryFixture
+	snapshot, err := check.Collect(ctx)
+	if err != nil {
+		return policy.DirectorySnapshot{}, err
+	}
+	if !slices.ContainsFunc(snapshot.Devices, func(device policy.Device) bool { return device.Active && len(device.GroupIDs) > 0 }) {
+		return policy.DirectorySnapshot{}, ErrRead
+	}
+	return snapshot, nil
 }
 
 // Collect returns a complete bounded snapshot or no snapshot at all.
@@ -154,7 +216,7 @@ func (r *Reader) Collect(ctx context.Context) (result policy.DirectorySnapshot, 
 		defer cancelException()
 	}
 	credentials, err := r.credentials(ctx)
-	if err != nil || ctx.Err() != nil || !validCredentials(credentials, r.config.BaseDN) {
+	if err != nil || ctx.Err() != nil || !validCredentials(credentials, r.config.BaseDN, r.config.Mapping != nil) {
 		return policy.DirectorySnapshot{}, readError(ctx)
 	}
 	connection, err := r.dial(ctx, isPlaintext)
@@ -235,13 +297,22 @@ func safeSearch(client searcher, request *ldap.SearchRequest) (result *ldap.Sear
 	return client.Search(request)
 }
 
-func validCredentials(credentials Credentials, baseDN string) bool {
-	if credentials.Password == "" || len(credentials.Password) > 4096 {
+func validCredentials(credentials Credentials, baseDN string, mapped bool) bool {
+	return credentials.Password != "" && len(credentials.Password) <= 4096 &&
+		validBindDN(credentials.BindDN, baseDN, mapped)
+}
+
+func validBindDN(bindDN, baseDN string, mapped bool) bool {
+	dn, ok := parseConfigDN(bindDN, 2048)
+	if !ok {
 		return false
 	}
-	dn, err := ldap.ParseDN(credentials.BindDN)
+	if mapped {
+		base, baseErr := ldap.ParseDN(baseDN)
+		return baseErr == nil && base != nil && base.AncestorOf(dn)
+	}
 	base, baseErr := ldap.ParseDN("ou=users," + baseDN)
-	return err == nil && baseErr == nil && dn != nil && base != nil &&
+	return baseErr == nil && base != nil &&
 		len(dn.RDNs) == len(base.RDNs)+1 && base.AncestorOfFold(dn)
 }
 
@@ -270,13 +341,16 @@ func (c *boundedConn) Close() error {
 
 func unexpectedClose(err error) bool { return err != nil && !errors.Is(err, net.ErrClosed) }
 
-func canonicalDN(raw string) (string, error) {
+func (r *Reader) canonicalDN(raw string) (string, error) {
 	if raw == "" || len(raw) > 2048 || strings.ContainsRune(raw, '\x00') {
 		return "", ErrRead
 	}
 	dn, err := ldap.ParseDN(raw)
 	if err != nil || dn == nil || len(dn.RDNs) == 0 {
 		return "", ErrRead
+	}
+	if r.config.Mapping != nil {
+		return dn.String(), nil
 	}
 	return strings.ToLower(dn.String()), nil
 }

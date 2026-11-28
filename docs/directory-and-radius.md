@@ -1,6 +1,6 @@
 # Directory collection and RADIUS evidence
 
-These are separate trust boundaries. Authentik supplies active identities,
+The selected LDAP directory supplies active identities,
 original groups and group policy. RADIUS supplies the agent's network-session
 evidence. Neither source can grant control over the router-owned protected
 floor, and a directory read cannot establish network ownership.
@@ -31,29 +31,99 @@ Credentials and directory data are unencrypted on this path. Expiry stops new
 collection; previously accepted grants keep their normal, independently bounded
 lease deadlines. This exception does not qualify production TLS or source authority.
 
-The collector performs one-level paged searches below `ou=groups` and
-`ou=users` in one configured provider base. Each group remains an individual
-entry; the collector never uses merged user attributes as group policy. It
-uses Authentik's `uid`, `cn`, object classes, `ak-active`, `member` and
-`memberOf` fields, and the group's `network_policy_v1` attribute. These fields
-are described in the [Authentik LDAP provider documentation](https://docs.goauthentik.io/add-secure-apps/providers/ldap/).
+By default the reader searches one level under the account and group bases. With no
+`mapping`, it uses Authentik's `ou=users` and `ou=groups` under `base_dn`,
+the `uid` and `cn` identity fields, `ak-active`, `member`, `memberOf` and the
+original group's `network_policy_v1`. The default mapping accepts LDAP BOOLEAN
+`TRUE` and `FALSE` and their historical lower-case spellings. The default bind identity is an immediate
+child of `ou=users`. [Authentik LDAP provider](https://docs.goauthentik.io/add-secure-apps/providers/ldap/)
 
-The collection contract is strict:
+The optional `search_mode` in `reader.json` controls both searches.
 
-- Paging is critical. Every successful page must carry exactly one paging
-  response control. Missing controls, referrals, repeated/oversized cookies,
-  duplicate entries or any LDAP error reject the entire collection, including
-  entries returned alongside a size-limit error.
-- Device subjects are accounts whose names parse as canonical Ethernet MACs.
-  Other account names are not device subjects. Device status must be exactly
-  `true` or `false`; inactive devices remain inputs for the compiler's denial.
-- Stable IDs must be unique within their namespace. MAC subjects must be
-  unique. Names must match entry DNs in the expected namespace. Duplicate or
-  multi-valued identity/status/policy attributes reject collection.
-- Direct memberships must agree in both directions between the user and the
-  original group. Missing references and inconsistent nested-group edges reject
-  collection. Parent policy is not flattened into device policy. A device's
-  own virtual group is ignored, never used as a policy contribution.
+- `auto` (default) requests an ordinary bounded search. If the server reports
+  `sizeLimitExceeded` within the client's capacity, the reader discards both
+  result sets and restarts both searches with critical paging.
+- `unpaged` requires a successful ordinary completion for each search. Select
+  it for a provider with complete ordinary searches and no paging support.
+- `paged` requires the RFC 2696 response control on every page and an empty
+  final cookie. Select it to skip the ordinary attempt on a large directory
+  with a smaller server limit. A missing, invalid or repeated continuation
+  rejects the entire read.
+
+All modes reject referrals, truncation, excess entries, timeouts, and
+connections closed before the final result. The original deadline and byte
+budget cover any retry. [LDAP search](https://www.rfc-editor.org/rfc/rfc4511#section-4.5) · [Paged search](https://www.rfc-editor.org/rfc/rfc2696)
+
+To use another schema, supply the complete `mapping` object. For example, this
+configuration reads groups from `groupOfNames` and accounts from `inetOrgPerson`
+with a MAC attribute available through an auxiliary class. The directory
+administrator must reserve the selected attributes and restrict writes to
+policy administrators. In particular, a self-editable `description` or
+`employeeType` cannot be an authority for network access.
+
+```json
+{
+  "users_base_dn": "ou=People,dc=example,dc=test",
+  "groups_base_dn": "ou=Roles,dc=example,dc=test",
+  "user_object_class": "inetOrgPerson",
+  "group_object_class": "groupOfNames",
+  "user_id": "entryUUID",
+  "group_id": "entryUUID",
+  "user_rdn": "uid",
+  "group_rdn": "cn",
+  "device_mac": "macAddress",
+  "group_name": "cn",
+  "device_active": "employeeType",
+  "active_value": "enabled",
+  "inactive_value": "disabled",
+  "group_member": "member",
+  "group_policy": "description"
+}
+```
+
+Base and member DNs in explicit mappings retain attribute value case. Each
+entry has one naming attribute/value in its RDN. With `mapping`, both search
+bases lie at or below `base_dn`, and the lookup identity may be in a separate
+service-account container below that base. The reader requests the configured
+object class within each base. The bases can coincide when the two classes are
+distinct and their matching entries are disjoint.
+
+Set `user_scope` or `group_scope` to `subtree` for nested containers. The
+default for each is `one`. A subtree includes the base object itself when its
+class, naming attribute and mapped fields match. The reader checks that every
+returned entry lies within the configured base. Referrals and partial member
+attribute ranges invalidate the read.
+
+For binary identities such as Active Directory's `objectGUID`, select the
+attribute in `user_id` or `group_id` and set its associated `user_id_encoding`
+or `group_id_encoding` to `hex`. The stable policy ID is lowercase hex of
+the 1–64 bytes in LDAP wire order. Text is the default. Treat changing a live
+identity attribute or encoding as an identity migration. [Microsoft objectGUID](https://learn.microsoft.com/en-us/windows/win32/adschema/a-objectguid)
+
+An integer account-control field can use `disabled_bit` in place of both
+text values. For example, `device_active: userAccountControl` with
+`disabled_bit: 2` accepts a canonical unsigned 32-bit decimal and marks
+the account active when bit 2 is clear. Missing or malformed data invalidates
+the collection. This rule tests one flag. Sites that also use lockout,
+expiration or other eligibility rules need an authoritative status attribute
+that represents those rules. [Microsoft account-control flags](https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/useraccountcontrol-manipulate-account-properties)
+
+- Use directory-managed, unique textual IDs, such as `entryUUID`, which remain
+  stable across renames. A MAC can appear on only one device. Groups grant
+  policy solely through their own policy attribute. Duplicate or multi-valued
+  identity, activation or policy fields reject collection.
+- A missing dedicated MAC attribute identifies a non-device account. A
+  supplied dedicated MAC must parse as an Ethernet address. If the MAC field
+  is also the account ID or naming field, ordinary human names are skipped.
+  A device needs one value for its configured activation rule. An unknown or
+  absent value invalidates the read.
+- A group's `group_member` contains direct member DNs. Each member must resolve
+  inside the searches. Omit `member_of` when the directory makes the group
+  authoritative. Set it to a backlink attribute, such as `memberOf`, to check
+  direct edges in both directions. Nested groups never give a device their
+  parent policy. The default Authentik mapping recognizes the separate
+  per-user virtual group.
+
 - Malformed group-policy JSON is retained for the compiler's device denial;
   it is not silently discarded to authorize from the remaining groups. Names
   beginning `vlan-`, `trusted-`, `guest-`, `untrusted-`, `infrastructure-`,
@@ -71,11 +141,9 @@ controls reject collection. Entry attribute data is limited to
 Exceeding a limit returns no snapshot rather than a permitted subset.
 
 `ObservedAt` is sampled before credential retrieval and dialing, so the time
-spent collecting consumes authorization lifetime. Successful paging means
-all requested reads finished; it is not an LDAP database transaction or proof
-that no account changed during collection. Membership consistency checks catch
-some concurrent changes, not every concurrent policy edit. Normal bounded
-refresh/revocation requirements still apply.
+spent collecting consumes authorization lifetime. Concurrent directory updates
+can occur between the group and account searches. Checking both membership
+directions catches inconsistent edges.
 
 ### Qualification before integration
 
@@ -115,6 +183,14 @@ router-policy-reader -config-directory /run/router-policy-reader -check-provider
 router-policy-reader -config-directory /run/router-policy-reader -check-provider multi-page
 ```
 
+For a provider using ordinary searches, run `-check-provider unpaged` with
+the same synthetic grant, remove its direct membership, then run
+`-check-provider unpaged-withdrawn`. Interrupt an ordinary search after it has
+sent entries and verify that the previous grant deadline does not advance.
+Each ordinary check requires two visible accounts and two visible groups, an
+active device with a direct membership, verified TLS and a fresh helper
+receipt with the expected positive or zero grant count.
+
 The first command requests the normal 256 entries per page and requires one
 populated page for each OU. The second requests one entry per page and requires
 at least two populated pages in each OU. Both require terminal paging controls
@@ -137,6 +213,19 @@ single-stage command reports an unexpected grant count as failure even when
 the helper successfully applied that collection.
 
 ## Reader command
+
+For an offline build check, pipe the generated `reader.json` into the reader
+binary that will run on the router. Supply the optional lookup DN to check its
+scope against `base_dn` and the selected mapping.
+
+```sh
+router-policy-reader -check-config -check-bind-dn "$bind_dn" < reader.json
+```
+
+A successful check prints `{"result":"pass"}`. Invalid configuration exits
+with status 1. The check uses the production parser and transport and mapping
+rules. Credential loading, CA verification and directory and helper connections
+happen separately at runtime.
 
 Build `cmd/router-policy-reader` with `make build`, then run it under the
 separately provisioned non-root reader identity:
@@ -166,6 +255,9 @@ directory rather than granting the process access to privileged configuration.
 | `base_dn` | The separately authorized provider namespace. |
 | `helper_socket` | Clean absolute request-socket path, at most 107 bytes. Its filesystem ownership and root peer UID are checked before sending. |
 | `custom_ca` | If true, use only the checked `ca.pem` in this directory; otherwise use system roots. |
+
+Optional `search_mode` and `mapping` select the search strategy and LDAP
+fields described under [Directory collection](#directory-collection).
 
 The optional `plaintext_until` field must be a UTC RFC3339 timestamp ending in
 `Z`. A nonempty value enables only the bounded private-literal-IP exception

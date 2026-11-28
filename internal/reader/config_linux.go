@@ -23,17 +23,20 @@ const maximumCredentials = 8 << 10
 const maximumCA = 64 << 10
 
 type config struct {
-	SchemaVersion  int    `json:"schema_version"`
-	DirectoryURL   string `json:"directory_url"`
-	BaseDN         string `json:"base_dn"`
-	HelperSocket   string `json:"helper_socket"`
-	CustomCA       bool   `json:"custom_ca"`
-	PlaintextUntil string `json:"plaintext_until,omitempty"`
+	plaintextDeadline time.Time
+	SchemaVersion     int                `json:"schema_version"`
+	DirectoryURL      string             `json:"directory_url"`
+	BaseDN            string             `json:"base_dn"`
+	SearchMode        *string            `json:"search_mode,omitempty"`
+	Mapping           *directory.Mapping `json:"mapping,omitempty"`
+	HelperSocket      string             `json:"helper_socket"`
+	CustomCA          bool               `json:"custom_ca"`
+	PlaintextUntil    string             `json:"plaintext_until,omitempty"`
 }
 
 func decodeConfig(data []byte) (config, error) {
 	keys := []string{"schema_version", "directory_url", "base_dn", "helper_socket", "custom_ca"}
-	if err := strictjson.Object(data, keys, []string{"plaintext_until"}, maximumConfig); err != nil {
+	if err := strictjson.Object(data, keys, []string{"plaintext_until", "search_mode", "mapping"}, maximumConfig); err != nil {
 		return config{}, errRuntime
 	}
 	var parsed config
@@ -43,13 +46,51 @@ func decodeConfig(data []byte) (config, error) {
 	if parsed.SchemaVersion != 1 || !privatePath(parsed.HelperSocket, 107) {
 		return config{}, errRuntime
 	}
-	if parsed.PlaintextUntil != "" {
-		if _, err := time.Parse(time.RFC3339Nano, parsed.PlaintextUntil); err != nil ||
-			!strings.HasSuffix(parsed.PlaintextUntil, "Z") || parsed.CustomCA {
+	if parsed.SearchMode != nil {
+		switch *parsed.SearchMode {
+		case "auto", "paged", "unpaged":
+		default:
 			return config{}, errRuntime
 		}
 	}
+	if parsed.PlaintextUntil != "" {
+		deadline, err := time.Parse(time.RFC3339Nano, parsed.PlaintextUntil)
+		if err != nil ||
+			!strings.HasSuffix(parsed.PlaintextUntil, "Z") || parsed.CustomCA {
+			return config{}, errRuntime
+		}
+		parsed.plaintextDeadline = deadline
+	}
 	return parsed, nil
+}
+
+func (c config) directoryConfig() directory.Config {
+	options := directory.Config{
+		URL: c.DirectoryURL, BaseDN: c.BaseDN, Mapping: c.Mapping,
+		PlaintextUntil: c.plaintextDeadline, Timeout: collectionTimeout,
+		PageSize: 256, MaximumDevices: 4096, MaximumGroups: 8192,
+	}
+	if c.SearchMode != nil {
+		options.SearchMode = *c.SearchMode
+	}
+	return options
+}
+
+// CheckConfig validates one bounded reader.json document before deployment.
+// bindDN is optional. No runtime files, credentials or sockets are opened.
+func CheckConfig(input io.Reader, bindDN *string) error {
+	if input == nil {
+		return errRuntime
+	}
+	data, err := io.ReadAll(io.LimitReader(input, maximumConfig+1))
+	if err != nil || len(data) > maximumConfig {
+		return errRuntime
+	}
+	c, err := decodeConfig(data)
+	if err != nil || directory.CheckConfig(c.directoryConfig(), bindDN) != nil {
+		return errRuntime
+	}
+	return nil
 }
 
 func privatePath(path string, maximum int) bool {

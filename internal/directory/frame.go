@@ -147,6 +147,22 @@ func validControlValues(frame []byte, nodes *int) bool {
 	if !ok {
 		return false
 	}
+	if len(message) >= 2 {
+		// Only the final search response carries the requested paging control.
+		// SearchResultDone with a referral field cannot certify a complete read.
+		operation := message[1]
+		switch operation[0] {
+		case 0x61, 0x64, 0x73, 0x78: // Bind, search entry, referral, or StartTLS response.
+			return len(message) == 2
+		case 0x65: // SearchResultDone.
+			fields, ok := frameChildren(operation, 3)
+			if !ok || len(fields) != 3 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
 	if len(message) < 3 {
 		return true
 	}

@@ -84,3 +84,46 @@ func TestRunReaderShutdownAndBrokenStreams(t *testing.T) {
 		t.Fatal("actual reader accepted missing configuration or privileged identity")
 	}
 }
+
+func TestRunReaderOfflineCheck(t *testing.T) {
+	t.Parallel()
+	const config = `{"schema_version":1,"directory_url":"ldaps://offline.invalid:636","base_dn":"dc=example","custom_ca":true,"helper_socket":"/absent/private.sock"}`
+	const bind = "cn=synthetic-private,ou=users,dc=example"
+	for _, test := range []struct {
+		name string
+		args []string
+		doc  string
+		code int
+	}{
+		{name: "static configuration", args: []string{"-check-config"}, doc: config},
+		{name: "valid lookup", args: []string{"-check-config", "-check-bind-dn", bind}, doc: config},
+		{name: "wrong lookup", args: []string{"-check-config", "-check-bind-dn", "cn=synthetic-private,dc=other"}, doc: config, code: 1},
+		{name: "empty lookup", args: []string{"-check-config", "-check-bind-dn="}, doc: config, code: 2},
+		{name: "repeated lookup", args: []string{"-check-config", "-check-bind-dn", bind, "-check-bind-dn", bind}, doc: config, code: 2},
+		{name: "invalid document", args: []string{"-check-config"}, doc: `{"private":"synthetic-private"}`, code: 1},
+		{name: "trailing input", args: []string{"-check-config"}, doc: config + "{}", code: 1},
+		{name: "mixed provider check", args: []string{"-check-provider", "unpaged", "-check-config"}, doc: config, code: 2},
+		{name: "mixed directory", args: []string{"-check-config", "-config-directory", "/absent"}, doc: config, code: 2},
+		{name: "mixed empty directory", args: []string{"-check-config", "-config-directory="}, doc: config, code: 2},
+		{name: "mixed version", args: []string{"-version", "-check-config"}, doc: config, code: 2},
+		{name: "orphan lookup", args: []string{"-config-directory", "/absent", "-check-bind-dn", bind}, code: 2},
+		{name: "mixed runtime and version", args: []string{"-version", "-config-directory", "/absent"}, code: 2},
+		{name: "extra path", args: []string{"-check-config", "synthetic-private"}, doc: config, code: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out, diagnostics bytes.Buffer
+			streams := CheckIO{In: strings.NewReader(test.doc), Out: &out, Err: &diagnostics}
+			code := runReader(t.Context(), test.args, streams, func(context.Context, string, io.Writer) error {
+				t.Fatal("offline command invoked the runtime")
+				return nil
+			})
+			if code != test.code {
+				t.Fatalf("exit code %d, want %d", code, test.code)
+			}
+			if code == 0 && (out.String() != "{\"result\":\"pass\"}\n" || diagnostics.Len() != 0) ||
+				code != 0 && (out.Len() != 0 || diagnostics.Len() == 0 || strings.Contains(diagnostics.String(), "synthetic-private")) {
+				t.Fatal("unexpected output or disclosure")
+			}
+		})
+	}
+}

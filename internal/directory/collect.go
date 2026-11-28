@@ -2,9 +2,12 @@ package directory
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -24,13 +27,16 @@ type groupEntry struct {
 }
 
 func (r *Reader) collect(ctx context.Context, client searcher, observed time.Time) (policy.DirectorySnapshot, error) {
-	groups, err := r.pages(ctx, client, "groups", r.config.MaximumGroups)
-	if err != nil {
-		return policy.DirectorySnapshot{}, ErrRead
+	// A size-limited ordinary search never contributes entries to a paged
+	// collection. Both namespaces restart on the same bound connection and
+	// share the original deadline and byte budget.
+	paged := r.config.SearchMode == "paged"
+	groups, users, err := r.namespaces(ctx, client, paged)
+	if r.config.SearchMode == "auto" && errors.Is(err, errSizeLimit) {
+		groups, users, err = r.namespaces(ctx, client, true)
 	}
-	users, err := r.pages(ctx, client, "users", r.config.MaximumDevices)
 	if err != nil {
-		return policy.DirectorySnapshot{}, ErrRead
+		return policy.DirectorySnapshot{}, readError(ctx)
 	}
 	snapshot := policy.DirectorySnapshot{
 		ObservedAt: observed, Complete: true,
@@ -46,7 +52,8 @@ func (r *Reader) collect(ctx context.Context, client searcher, observed time.Tim
 		byDN[group.dn], groupIDs[group.group.ID] = group, true
 		snapshot.Groups = append(snapshot.Groups, group.group)
 	}
-	if err := completeMemberships(byDN, users); err != nil {
+	memberships, err := r.directMemberships(byDN, users)
+	if err != nil {
 		return policy.DirectorySnapshot{}, ErrRead
 	}
 	deviceIDs, macs := map[string]bool{}, map[string]bool{}
@@ -54,13 +61,13 @@ func (r *Reader) collect(ctx context.Context, client searcher, observed time.Tim
 		if err := ctx.Err(); err != nil {
 			return policy.DirectorySnapshot{}, readError(ctx)
 		}
-		attributes, attrErr := checkedAttributes(entry)
-		id, idOK := single(attributes, "uid")
-		if attrErr != nil || !idOK || deviceIDs[id] {
+		attributes, attrErr := checkedAttributes(entry, r.mapping.UserID, r.mapping.UserIDEncoding)
+		id, idOK := single(attributes, r.mapping.UserID)
+		if attrErr != nil || !idOK || deviceIDs[id] || !stableID.MatchString(id) {
 			return policy.DirectorySnapshot{}, ErrRead
 		}
 		deviceIDs[id] = true
-		device, isDevice, err := r.device(entry, byDN)
+		device, isDevice, err := r.device(entry, attributes, byDN, memberships)
 		if err != nil {
 			return policy.DirectorySnapshot{}, ErrRead
 		}
@@ -82,38 +89,43 @@ func (r *Reader) collect(ctx context.Context, client searcher, observed time.Tim
 	return snapshot, nil
 }
 
-func (r *Reader) pages(ctx context.Context, client searcher, unit string, maximum int) ([]*ldap.Entry, error) {
-	attributes := []string{"uid", "cn", "objectClass", "ak-active", "memberOf"}
-	if unit == "groups" {
-		attributes = []string{"uid", "cn", "objectClass", "member", "memberOf", policy.Attribute}
+// errSizeLimit is returned only after the server reports an LDAP size limit.
+// The client-side bound is always a rejected observation and cannot trigger a retry.
+var errSizeLimit = errors.New("directory: LDAP search size limit")
+
+func (r *Reader) namespaces(ctx context.Context, client searcher, paged bool) ([]*ldap.Entry, []*ldap.Entry, error) {
+	groups, err := r.search(ctx, client, "groups", r.config.MaximumGroups, paged)
+	if err != nil {
+		return nil, nil, err
 	}
-	result := []*ldap.Entry{}
+	users, err := r.search(ctx, client, "users", r.config.MaximumDevices, paged)
+	return groups, users, err
+}
+
+func (r *Reader) search(ctx context.Context, client searcher, unit string, maximum int, paged bool) ([]*ldap.Entry, error) {
+	spec := r.searchSpec(unit)
+	entries := []*ldap.Entry{}
 	seenEntries, cookies := map[string]bool{}, map[string]bool{}
 	page := ldap.NewControlPaging(r.config.PageSize)
-	// Empty intermediate pages are permitted, but cannot create an endless read.
 	populatedPages := 0
 	for pageIndex := range maximum + 1 {
-		if err := ctx.Err(); err != nil {
+		if ctx.Err() != nil {
 			return nil, readError(ctx)
 		}
-		request := ldap.NewSearchRequest(
-			"ou="+unit+","+r.config.BaseDN,
-			ldap.ScopeSingleLevel,
-			ldap.NeverDerefAliases,
-			maximum+1,
-			max(1, int(r.config.Timeout/time.Second)),
-			false,
-			"(objectClass=*)",
-			attributes,
-			[]ldap.Control{criticalPage(page)},
-		)
+		var controls []ldap.Control
+		if paged {
+			controls = []ldap.Control{criticalPage(page)}
+		}
+		request := ldap.NewSearchRequest(spec.base, spec.scope, ldap.NeverDerefAliases, maximum+1,
+			max(1, int(r.config.Timeout/time.Second)), false, spec.filter, spec.attributes, controls)
 		request.EnforceSizeLimit = true
 		response, err := safeSearch(client, request)
-		if err != nil || response == nil || len(response.Referrals) != 0 {
-			return nil, ErrRead
+		if !paged && ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) &&
+			response != nil && response.ResultCode == ldap.LDAPResultSizeLimitExceeded && len(response.Referrals) == 0 && len(response.Controls) == 0 && len(response.Entries) <= maximum {
+			return nil, errSizeLimit
 		}
-		if len(response.Entries) > maximum-len(result) ||
-			r.checkPages != ordinaryRead && len(response.Entries) > int(r.config.PageSize) {
+		if err != nil || response == nil || response.ResultCode != ldap.LDAPResultSuccess || len(response.Referrals) != 0 || len(response.Entries) > maximum-len(entries) ||
+			paged && r.checkPages != ordinaryRead && len(response.Entries) > int(r.config.PageSize) {
 			return nil, ErrRead
 		}
 		if len(response.Entries) != 0 {
@@ -123,32 +135,32 @@ func (r *Reader) pages(ctx context.Context, client searcher, unit string, maximu
 			if entry == nil {
 				return nil, ErrRead
 			}
-			dn, err := canonicalDN(entry.DN)
+			dn, err := r.canonicalDN(entry.DN)
 			if err != nil || seenEntries[dn] {
 				return nil, ErrRead
 			}
 			seenEntries[dn] = true
-			result = append(result, entry)
+			entries = append(entries, entry)
 		}
-		var returned *ldap.ControlPaging
-		for _, control := range response.Controls {
-			paging, ok := control.(*ldap.ControlPaging)
-			if !ok || paging == nil || returned != nil {
+		if !paged {
+			if len(response.Controls) != 0 || r.checkPages == ordinaryFixture && len(entries) < 2 {
 				return nil, ErrRead
 			}
-			returned = paging
+			return entries, nil
 		}
-		if returned == nil || len(returned.Cookie) > 4096 {
+		if len(response.Controls) != 1 {
+			return nil, ErrRead
+		}
+		returned, ok := response.Controls[0].(*ldap.ControlPaging)
+		if !ok || returned == nil || len(returned.Cookie) > 4096 {
 			return nil, ErrRead
 		}
 		if len(returned.Cookie) == 0 {
-			if r.checkPages == multiplePopulatedPages && populatedPages < 2 {
+			if r.checkPages == multiplePopulatedPages && populatedPages < 2 ||
+				r.checkPages == onePopulatedPage && (pageIndex != 0 || populatedPages != 1) {
 				return nil, ErrRead
 			}
-			if r.checkPages == onePopulatedPage && (pageIndex != 0 || populatedPages != 1) {
-				return nil, ErrRead
-			}
-			return result, nil
+			return entries, nil
 		}
 		cookie := string(returned.Cookie)
 		if cookies[cookie] {
@@ -168,34 +180,35 @@ func criticalPage(page *ldap.ControlPaging) ldap.Control {
 }
 
 func (r *Reader) group(entry *ldap.Entry) (groupEntry, error) {
-	attributes, err := checkedAttributes(entry)
-	if err != nil || !slices.Contains(attributes["objectclass"], "goauthentik.io/ldap/group") {
+	attributes, err := checkedAttributes(entry, r.mapping.GroupID, r.mapping.GroupIDEncoding)
+	if err != nil || !hasClass(attributes, r.mapping.GroupObjectClass) {
 		return groupEntry{}, ErrRead
 	}
-	id, idOK := single(attributes, "uid")
-	name, nameOK := single(attributes, "cn")
-	dn, err := r.entryDN(entry.DN, "groups", name)
-	if err != nil || !idOK || !nameOK || !stableID.MatchString(id) || !validName(name) {
+	id, idOK := single(attributes, r.mapping.GroupID)
+	name, nameOK := single(attributes, r.mapping.GroupName)
+	rdn, rdnOK := single(attributes, r.mapping.GroupRDN)
+	dn, err := r.entryDN(entry.DN, r.mapping.GroupsBaseDN, r.mapping.GroupRDN, rdn, r.mapping.GroupScope)
+	if err != nil || !rdnOK || !validName(rdn) || !idOK || !nameOK || !stableID.MatchString(id) || !validName(name) {
 		return groupEntry{}, ErrRead
 	}
 	group := policy.Group{ID: id, Name: name, IsNetwork: networkName(name)}
-	if values, exists := attributes[policy.Attribute]; exists {
+	if values, exists := attributes[strings.ToLower(r.mapping.GroupPolicy)]; exists {
 		if len(values) != 1 || len(values[0]) > policy.AttributeLimit || !utf8.ValidString(values[0]) {
 			return groupEntry{}, ErrRead
 		}
 		group.Policy, group.IsNetwork = &values[0], true
 	}
 	members := map[string]bool{}
-	for _, raw := range attributes["member"] {
-		member, err := canonicalDN(raw)
+	for _, raw := range attributes[strings.ToLower(r.mapping.GroupMember)] {
+		member, err := r.canonicalDN(raw)
 		if err != nil || members[member] {
 			return groupEntry{}, ErrRead
 		}
 		members[member] = true
 	}
 	parents := map[string]bool{}
-	for _, raw := range attributes["memberof"] {
-		parent, err := canonicalDN(raw)
+	for _, raw := range attributes[strings.ToLower(r.mapping.MemberOf)] {
+		parent, err := r.canonicalDN(raw)
 		if err != nil || parents[parent] {
 			return groupEntry{}, ErrRead
 		}
@@ -204,17 +217,21 @@ func (r *Reader) group(entry *ldap.Entry) (groupEntry, error) {
 	return groupEntry{group: group, dn: dn, members: members, parents: parents}, nil
 }
 
-// completeMemberships rejects dangling references and inconsistent nested-group
-// edges. It does not flatten a parent into a device's direct policy membership.
-func completeMemberships(groups map[string]groupEntry, users []*ldap.Entry) error {
+// directMemberships indexes each user's original group edges once. Nested
+// groups are validated separately and never supply inherited device permissions.
+func (r *Reader) directMemberships(groups map[string]groupEntry, users []*ldap.Entry) (map[string][]string, error) {
+	direct := map[string][]string{}
 	userEntries := map[string]bool{}
 	for _, entry := range users {
 		if entry == nil {
-			return ErrRead
+			return nil, ErrRead
 		}
-		dn, err := canonicalDN(entry.DN)
+		dn, err := r.canonicalDN(entry.DN)
 		if err != nil || userEntries[dn] {
-			return ErrRead
+			return nil, ErrRead
+		}
+		if _, overlap := groups[dn]; overlap {
+			return nil, ErrRead
 		}
 		userEntries[dn] = true
 	}
@@ -222,68 +239,104 @@ func completeMemberships(groups map[string]groupEntry, users []*ldap.Entry) erro
 		for parentDN := range group.parents {
 			parent, ok := groups[parentDN]
 			if !ok || !parent.members[dn] {
-				return ErrRead
+				return nil, ErrRead
 			}
 		}
 		for memberDN := range group.members {
 			if child, ok := groups[memberDN]; ok {
-				if !child.parents[dn] {
-					return ErrRead
+				if r.mapping.MemberOf != "" && !child.parents[dn] {
+					return nil, ErrRead
 				}
-			} else if !userEntries[memberDN] {
-				return ErrRead
+				continue
 			}
+			if !userEntries[memberDN] {
+				return nil, ErrRead
+			}
+			direct[memberDN] = append(direct[memberDN], dn)
 		}
 	}
-	return nil
+	return direct, nil
 }
 
-func (r *Reader) device(entry *ldap.Entry, groups map[string]groupEntry) (policy.Device, bool, error) {
-	attributes, err := checkedAttributes(entry)
-	if err != nil || !slices.Contains(attributes["objectclass"], "goauthentik.io/ldap/user") {
+func (r *Reader) device(entry *ldap.Entry, attributes map[string][]string, groups map[string]groupEntry, direct map[string][]string) (policy.Device, bool, error) {
+	if !hasClass(attributes, r.mapping.UserObjectClass) {
 		return policy.Device{}, false, ErrRead
 	}
-	id, idOK := single(attributes, "uid")
-	name, nameOK := single(attributes, "cn")
-	dn, err := r.entryDN(entry.DN, "users", name)
+	id, idOK := single(attributes, r.mapping.UserID)
+	name, nameOK := single(attributes, r.mapping.UserRDN)
+	dn, err := r.entryDN(entry.DN, r.mapping.UsersBaseDN, r.mapping.UserRDN, name, r.mapping.UserScope)
 	if err != nil || !idOK || !nameOK || !stableID.MatchString(id) || !validName(name) {
 		return policy.Device{}, false, ErrRead
 	}
-	mac, isDevice := macSubject(name)
-	if !isDevice {
-		// The provider may also expose human accounts. They are not MAC subjects.
+	macValues, exists := attributes[strings.ToLower(r.mapping.DeviceMAC)]
+	if !exists {
 		return policy.Device{}, false, nil
 	}
-	active, activeOK := single(attributes, "ak-active")
-	if !activeOK || active != "true" && active != "false" {
+	if len(macValues) != 1 {
 		return policy.Device{}, false, ErrRead
 	}
-	device := policy.Device{ID: id, MAC: mac, Active: active == "true", GroupIDs: []string{}}
+	mac, isDevice := macSubject(macValues[0])
+	if !isDevice {
+		// A naming or identity field may also contain ordinary human accounts.
+		if strings.EqualFold(r.mapping.DeviceMAC, r.mapping.UserRDN) ||
+			strings.EqualFold(r.mapping.DeviceMAC, r.mapping.UserID) {
+			return policy.Device{}, false, nil
+		}
+		return policy.Device{}, false, ErrRead
+	}
+	value, present := single(attributes, r.mapping.DeviceActive)
+	active, ok := r.accountActive(value)
+	if !present || !ok {
+		return policy.Device{}, false, ErrRead
+	}
+	device := policy.Device{ID: id, MAC: mac, Active: active, GroupIDs: []string{}}
 	memberships := map[string]bool{}
-	for _, raw := range attributes["memberof"] {
-		membership, err := canonicalDN(raw)
+	for _, raw := range attributes[strings.ToLower(r.mapping.MemberOf)] {
+		membership, err := r.canonicalDN(raw)
 		if err != nil || memberships[membership] {
 			return policy.Device{}, false, ErrRead
 		}
 		memberships[membership] = true
-		if _, err := r.entryDN(raw, "virtual-groups", name); err == nil {
-			continue
+		if r.config.Mapping == nil {
+			if _, err := r.entryDN(raw, "ou=virtual-groups,"+r.config.BaseDN, "cn", name, "one"); err == nil {
+				continue
+			}
 		}
 		group, exists := groups[membership]
 		if !exists || !group.members[dn] {
 			// Inherited parent membership is not a direct policy contribution.
 			return policy.Device{}, false, ErrRead
 		}
-		device.GroupIDs = append(device.GroupIDs, group.group.ID)
 	}
-	for groupDN, group := range groups {
-		if group.members[dn] != memberships[groupDN] {
-			// Omitting one membership must not authorize a subset of its groups.
+	for _, groupDN := range direct[dn] {
+		if r.mapping.MemberOf != "" && !memberships[groupDN] {
 			return policy.Device{}, false, ErrRead
 		}
+		device.GroupIDs = append(device.GroupIDs, groups[groupDN].group.ID)
 	}
 	slices.Sort(device.GroupIDs)
 	return device, true, nil
+}
+
+func (r *Reader) accountActive(value string) (bool, bool) {
+	if r.mapping.DisabledBit != 0 {
+		number, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || strconv.FormatUint(number, 10) != value {
+			return false, false
+		}
+		return number&uint64(r.mapping.DisabledBit) == 0, true
+	}
+	// Authentik emits LDAP BOOLEAN on the wire. Keep the historical
+	// lower-case spellings without changing exact matches in explicit mappings.
+	if r.config.Mapping == nil {
+		switch value {
+		case "TRUE":
+			return true, true
+		case "FALSE":
+			return false, true
+		}
+	}
+	return value == r.mapping.ActiveValue, value == r.mapping.ActiveValue || value == r.mapping.InactiveValue
 }
 
 func macSubject(name string) (string, bool) {
@@ -291,20 +344,43 @@ func macSubject(name string) (string, bool) {
 	return mac, err == nil
 }
 
-func (r *Reader) entryDN(raw, unit, name string) (string, error) {
-	canonical, err := canonicalDN(raw)
+func (r *Reader) entryDN(raw, base, attr, value, scope string) (string, error) {
+	canonical, err := r.canonicalDN(raw)
 	if err != nil {
 		return "", ErrRead
 	}
-	dn, parseErr := ldap.ParseDN(raw)
-	expected, baseErr := ldap.ParseDN("cn=" + ldap.EscapeDN(name) + ",ou=" + unit + "," + r.config.BaseDN)
-	if parseErr != nil || baseErr != nil || !expected.EqualFold(dn) {
+	dn, err := ldap.ParseDN(raw)
+	if err != nil || len(dn.RDNs) == 0 {
+		return "", ErrRead
+	}
+	if r.config.Mapping == nil {
+		expected, err := ldap.ParseDN(attr + "=" + ldap.EscapeDN(value) + "," + base)
+		if err != nil || !expected.EqualFold(dn) {
+			return "", ErrRead
+		}
+		return canonical, nil
+	}
+	// LDAP attribute types compare without case. Preserve the configured
+	// naming values because their matching rules belong to the directory.
+	leaf := dn.RDNs[0].Attributes
+	if len(leaf) != 1 || !strings.EqualFold(leaf[0].Type, attr) || leaf[0].Value != value {
+		return "", ErrRead
+	}
+	parent, err := ldap.ParseDN(base)
+	if err != nil || !parent.Equal(dn) && !parent.AncestorOf(dn) {
+		return "", ErrRead
+	}
+	if scope != "subtree" && len(dn.RDNs) != len(parent.RDNs)+1 {
 		return "", ErrRead
 	}
 	return canonical, nil
 }
 
-func checkedAttributes(entry *ldap.Entry) (map[string][]string, error) {
+func hasClass(attributes map[string][]string, class string) bool {
+	return slices.ContainsFunc(attributes["objectclass"], func(value string) bool { return strings.EqualFold(value, class) })
+}
+
+func checkedAttributes(entry *ldap.Entry, idAttribute, idEncoding string) (map[string][]string, error) {
 	if entry == nil || len(entry.Attributes) > 16 {
 		return nil, ErrRead
 	}
@@ -318,6 +394,18 @@ func checkedAttributes(entry *ldap.Entry) (map[string][]string, error) {
 		if _, exists := result[name]; exists || name == "" || strings.Contains(name, ";") {
 			return nil, ErrRead
 		}
+		if idEncoding == "hex" && strings.EqualFold(attribute.Name, idAttribute) {
+			if len(attribute.Values) != 1 || len(attribute.Values[0]) == 0 || len(attribute.Values[0]) > 64 {
+				return nil, ErrRead
+			}
+			value := attribute.Values[0]
+			total += len(value)
+			if total > 1<<20 {
+				return nil, ErrRead
+			}
+			result[name] = []string{hex.EncodeToString([]byte(value))}
+			continue
+		}
 		for _, value := range attribute.Values {
 			total += len(value)
 			if len(value) > policy.AttributeLimit || !utf8.ValidString(value) || total > 1<<20 {
@@ -330,7 +418,7 @@ func checkedAttributes(entry *ldap.Entry) (map[string][]string, error) {
 }
 
 func single(attributes map[string][]string, name string) (string, bool) {
-	values := attributes[name]
+	values := attributes[strings.ToLower(name)]
 	if len(values) != 1 {
 		return "", false
 	}
