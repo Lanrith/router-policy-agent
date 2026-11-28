@@ -2,6 +2,7 @@ package reader
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -21,7 +22,23 @@ import (
 // No firewall, binding, state, shell or directory-write operation is available.
 // Cancellation joins collection/submission I/O; diagnostics are fixed JSON
 // outcomes on the supplied writer. Source/enforcement qualification is separate.
-func Run(ctx context.Context, configDirectory string, diagnostics io.Writer) (result error) {
+func Run(ctx context.Context, configDirectory string, diagnostics io.Writer) error {
+	return run(ctx, configDirectory, diagnostics, "")
+}
+
+// CheckProvider qualifies one stage against the configured directory and helper.
+// It obtains a new complete snapshot and requires a positive applied receipt for
+// single-page and multi-page stages, or an applied zero-grant receipt for withdrawn.
+func CheckProvider(ctx context.Context, configDirectory string, output io.Writer, stage string) error {
+	switch stage {
+	case "single-page", "multi-page", "withdrawn":
+		return run(ctx, configDirectory, output, stage)
+	default:
+		return errRuntime
+	}
+}
+
+func run(ctx context.Context, configDirectory string, diagnostics io.Writer, stage string) (result error) {
 	if ctx == nil || diagnostics == nil || !privatePath(configDirectory, 4096) {
 		return errRuntime
 	}
@@ -48,13 +65,33 @@ func Run(ctx context.Context, configDirectory string, diagnostics io.Writer) (re
 	}
 	submit := func(ctx context.Context, snapshot policy.DirectorySnapshot) (ipc.Receipt, error) {
 		return ipc.Submit(ctx, ipc.ClientOptions{
-			Socket: socket, ServerUID: 0, Timeout: cycleTimeout,
+			Socket: socket, ServerUID: 0, Timeout: ipc.MaximumSubmissionTimeout,
 		}, snapshot)
+	}
+	if stage != "" {
+		collect := func(ctx context.Context) (policy.DirectorySnapshot, error) {
+			return collector.CheckProvider(ctx, stage != "single-page")
+		}
+		return checkProviderReceipt(ctx, collect, submit, diagnostics, stage == "withdrawn")
 	}
 	if err := runLoop(ctx, collector.Collect, submit, diagnostics); err != nil {
 		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 			return ctx.Err()
 		}
+		return errRuntime
+	}
+	return nil
+}
+
+func checkProviderReceipt(ctx context.Context, collect collectFunc, submit submitFunc, output io.Writer, withdrawn bool) error {
+	attempt, err := runCycle(ctx, collect, submit)
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(output).Encode(attempt); err != nil {
+		return errRuntime
+	}
+	if attempt.Outcome != "applied" || (attempt.GrantCount == 0) != withdrawn {
 		return errRuntime
 	}
 	return nil
@@ -73,7 +110,7 @@ func loadReader(ctx context.Context, root *os.Root, owner uint32) (*directory.Re
 	}
 	options := directory.Config{
 		URL: configuration.DirectoryURL, BaseDN: configuration.BaseDN,
-		Timeout: cycleTimeout, PageSize: 256, MaximumDevices: 4096, MaximumGroups: 8192,
+		Timeout: collectionTimeout, PageSize: 256, MaximumDevices: 4096, MaximumGroups: 8192,
 	}
 	if configuration.PlaintextUntil != "" {
 		options.PlaintextUntil, err = time.Parse(time.RFC3339Nano, configuration.PlaintextUntil)

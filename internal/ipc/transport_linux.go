@@ -17,6 +17,12 @@ import (
 	"github.com/lanrith/router-policy-agent/internal/policy"
 )
 
+const maximumRequestTimeout = 10 * time.Second
+
+// MaximumSubmissionTimeout includes the maximum authenticated helper request
+// plus a bounded allowance for connecting, queueing and receiving the reply.
+const MaximumSubmissionTimeout = maximumRequestTimeout + 2*time.Second
+
 // ProcessFunc must independently compile against helper-owned configuration,
 // bindings, durable state and time. The transport cannot enforce that contract
 // for an arbitrary callback. It never supplies any of those privileged inputs.
@@ -41,7 +47,7 @@ type Server struct {
 
 // NewServer rejects missing processors and timeouts outside the ten-second cap.
 func NewServer(options ServerOptions, process ProcessFunc) (*Server, error) {
-	if process == nil || options.Timeout <= 0 || options.Timeout > 10*time.Second {
+	if process == nil || options.Timeout <= 0 || options.Timeout > maximumRequestTimeout {
 		return nil, errors.New("ipc: invalid server options")
 	}
 	return &Server{options: options, process: process}, nil
@@ -191,7 +197,7 @@ type ClientOptions struct {
 // sending a bounded snapshot. It does not retry, refresh timestamps or turn a
 // rejected/shadow receipt into permission. Cancellation closes and joins I/O.
 func Submit(ctx context.Context, options ClientOptions, snapshot policy.DirectorySnapshot) (receipt Receipt, result error) {
-	if ctx == nil || options.Timeout <= 0 || options.Timeout > 10*time.Second {
+	if ctx == nil || options.Timeout <= 0 || options.Timeout > MaximumSubmissionTimeout {
 		return Receipt{}, errors.New("ipc: invalid client options")
 	}
 	ctx, cancel := context.WithTimeout(ctx, options.Timeout)

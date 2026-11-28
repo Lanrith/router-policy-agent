@@ -50,7 +50,11 @@ func withExportRoot(
 	if ctx == nil || publish == nil || os.Geteuid() != 0 {
 		return Collection{}, errors.New("radius: invalid export owner or dependency")
 	}
-	root, err := hostfs.OpenDirectory(ctx, hostfs.DirectoryOptions{Path: directory, OwnerUID: 0, Private: true})
+	return withOwnedExport(ctx, directory, 0, publish)
+}
+
+func withOwnedExport(ctx context.Context, directory string, owner uint32, publish func(*os.Root) (Collection, error)) (collected Collection, result error) {
+	root, err := hostfs.OpenDirectory(ctx, hostfs.DirectoryOptions{Path: directory, OwnerUID: owner, Private: true})
 	if err != nil {
 		return Collection{}, errors.New("radius: shadow directory unavailable")
 	}
@@ -62,7 +66,7 @@ func withExportRoot(
 			collected = Collection{}
 		}
 	}()
-	lock, err := hostfs.OpenLock(ctx, root, 0)
+	lock, err := hostfs.OpenLock(ctx, root, owner)
 	if err != nil {
 		return Collection{}, errors.New("radius: shadow lock unavailable")
 	}
@@ -113,8 +117,14 @@ func writeShadow(ctx context.Context, root *os.Root, report shadowReport) error 
 }
 
 func writeExport(ctx context.Context, root *os.Root, filename string, data []byte) (result error) {
-	if ctx == nil || root == nil || len(data) == 0 || len(data) > maximumShadow ||
-		(filename != shadowFilename && filename != "bindings.json") {
+	if filename != shadowFilename && filename != "bindings.json" {
+		return errors.New("radius: unknown export")
+	}
+	return writePrivate(ctx, root, filename, data, 0, maximumShadow)
+}
+
+func writePrivate(ctx context.Context, root *os.Root, filename string, data []byte, owner uint32, limit int) (result error) {
+	if ctx == nil || root == nil || len(data) == 0 || len(data) > limit {
 		return errors.New("radius: invalid export")
 	}
 	if err := ctx.Err(); err != nil {
@@ -122,7 +132,7 @@ func writeExport(ctx context.Context, root *os.Root, filename string, data []byt
 	}
 	// Refuse to replace links, special files or unsafe exports. Missing output is
 	// expected on first publication; no binding/state file is read or modified.
-	existing, err := hostfs.OpenRegular(ctx, root, hostfs.FileOptions{Name: filename, OwnerUID: 0, MaximumSize: maximumShadow})
+	existing, err := hostfs.OpenRegular(ctx, root, hostfs.FileOptions{Name: filename, OwnerUID: owner, MaximumSize: int64(limit)})
 	if err == nil {
 		if err := existing.Close(); err != nil {
 			return errors.New("radius: previous shadow close failed")
@@ -153,7 +163,7 @@ func writeExport(ctx context.Context, root *os.Root, filename string, data []byt
 			result = errors.Join(result, errors.New("radius: temporary shadow cleanup failed"))
 		}
 	}()
-	if err := hostfs.CheckPrivateFile(temporary, 0, 0); err != nil {
+	if err := hostfs.CheckPrivateFile(temporary, owner, 0); err != nil {
 		return errors.New("radius: unsafe temporary shadow")
 	}
 	n, err := temporary.Write(data)

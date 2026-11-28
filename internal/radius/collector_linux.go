@@ -19,6 +19,7 @@ import (
 // supplied sources, commands, clocks, device credentials or controller clients.
 // Timeout bounds the entire serial collection, not each individual source read.
 type CollectorOptions struct {
+	managedMACs    []string
 	Journal        JournalOptions
 	Kea            kea.Options
 	VLAN           uint16
@@ -68,10 +69,14 @@ func CollectIPv4(ctx context.Context, options CollectorOptions) (Collection, err
 		placement := *options.Placement
 		options.Placement = &placement
 	}
+	return collectNative(ctx, options, func(ctx context.Context) (history, error) { return captureHistory(ctx, options.Journal) })
+}
+
+func collectNative(ctx context.Context, options CollectorOptions, capture func(context.Context) (history, error)) (Collection, error) {
 	ctx, cancel := context.WithTimeout(ctx, options.Timeout)
 	defer cancel()
 	return collectIPv4(ctx, options, collectionSources{
-		history: func(ctx context.Context) (history, error) { return captureHistory(ctx, options.Journal) },
+		history: capture,
 		lease: func(ctx context.Context, mac string) (kea.Observation, error) {
 			return kea.ReadIPv4(ctx, options.Kea, mac)
 		},
@@ -109,20 +114,27 @@ func collectIPv4(ctx context.Context, options CollectorOptions, sources collecti
 	started := sources.now()
 	first, err := sources.history(ctx)
 	if err != nil {
-		return Collection{}, errors.Join(errors.New("radius: accounting source unavailable"), ctx.Err())
+		return Collection{}, errors.Join(errAccounting, err, ctx.Err())
 	}
-	observation, err := Replay(first.data, first.scope, first.observedAt)
-	if err != nil || len(observation.Sessions) > options.MaximumDevices {
-		return Collection{}, errors.New("radius: accounting source invalid or device quota exceeded")
+	observation, err := first.replay()
+	if err != nil {
+		return Collection{}, errAccounting
+	}
+	sessions := observation.Sessions
+	if options.managedMACs != nil {
+		sessions = slices.DeleteFunc(slices.Clone(sessions), func(s Session) bool { return !slices.Contains(options.managedMACs, s.MAC) })
+	}
+	if len(sessions) > options.MaximumDevices || options.managedMACs == nil && observation.DuplicateClaim {
+		return Collection{}, errBudget
 	}
 	scope := LeaseScope{SubnetID: options.Kea.SubnetID, Prefix: options.Kea.Prefix, VLAN: options.VLAN}
-	leases := make([]kea.Observation, 0, len(observation.Sessions))
-	for _, session := range observation.Sessions {
+	leases := make([]kea.Observation, 0, len(sessions))
+	for _, session := range sessions {
 		lease, err := sources.lease(ctx, session.MAC)
 		if err != nil {
-			return Collection{}, errors.Join(errors.New("radius: lease source unavailable"), ctx.Err())
+			return Collection{}, errors.Join(errLease, ctx.Err())
 		}
-		if _, err := MatchIPv4(session, lease, scope, sources.now().UTC()); err != nil {
+		if _, err := MatchIPv4(session, lease, scope, sources.now().UTC()); err != nil && options.managedMACs == nil {
 			return Collection{}, err
 		}
 		leases = append(leases, lease)
@@ -131,21 +143,25 @@ func collectIPv4(ctx context.Context, options CollectorOptions, sources collecti
 	if options.Placement != nil {
 		firstPlacement, err = sources.placement(ctx)
 		if err != nil {
-			return Collection{}, errors.Join(errors.New("radius: placement source unavailable"), ctx.Err())
+			return Collection{}, errors.Join(errPlacement, ctx.Err())
 		}
 	}
 	second, err := sources.history(ctx)
-	if err != nil || !steadyHistory(first, second, observation) {
-		return Collection{}, errors.Join(errors.New("radius: accounting changed during lease collection"), ctx.Err())
+	if err != nil || !recheckSessions(first, second, observation, sessions, leases, options.managedMACs != nil) {
+		return Collection{}, errors.Join(errChanged, err, ctx.Err())
 	}
-	for index, session := range observation.Sessions {
+	for index, session := range sessions {
 		lease, err := sources.lease(ctx, session.MAC)
 		if err != nil {
-			return Collection{}, errors.Join(errors.New("radius: lease recheck unavailable"), ctx.Err())
+			return Collection{}, errors.Join(errLease, ctx.Err())
 		}
 		current, currentErr := MatchIPv4(session, lease, scope, sources.now().UTC())
 		previous, previousErr := MatchIPv4(session, leases[index], scope, sources.now().UTC())
 		if currentErr != nil || previousErr != nil || current.OwnershipID != previous.OwnershipID || current.IP != previous.IP {
+			if options.managedMACs != nil {
+				leases[index] = kea.Observation{}
+				continue
+			}
 			return Collection{}, errors.New("radius: lease changed during collection")
 		}
 	}
@@ -153,12 +169,12 @@ func collectIPv4(ctx context.Context, options CollectorOptions, sources collecti
 	if options.Placement != nil {
 		lastPlacement, err = sources.placement(ctx)
 		if err != nil || lastPlacement.identity != firstPlacement.identity || lastPlacement.observedAt.Before(firstPlacement.observedAt) {
-			return Collection{}, errors.Join(errors.New("radius: placement source changed or unavailable"), ctx.Err())
+			return Collection{}, errors.Join(errPlacement, ctx.Err())
 		}
 	}
 	last, err := sources.history(ctx)
-	if err != nil || !steadyHistory(second, last, observation) {
-		return Collection{}, errors.Join(errors.New("radius: accounting changed during lease recheck"), ctx.Err())
+	if err != nil || !recheckSessions(second, last, observation, sessions, leases, options.managedMACs != nil) {
+		return Collection{}, errors.Join(errChanged, err, ctx.Err())
 	}
 	now := sources.now()
 	if err := ctx.Err(); err != nil {
@@ -178,8 +194,12 @@ func collectIPv4(ctx context.Context, options CollectorOptions, sources collecti
 		identities = append(identities, placementGuarded)
 	}
 	owners := make(map[netip.Addr]bool)
-	for index, session := range observation.Sessions {
+	for index, session := range sessions {
 		candidate, err := MatchIPv4(session, leases[index], scope, result.ObservedAt)
+		if err != nil && options.managedMACs != nil {
+			result.Withheld++
+			continue
+		}
 		if err != nil || owners[candidate.IP] {
 			return Collection{}, errors.New("radius: expired or duplicate ownership at collection end")
 		}
@@ -204,12 +224,44 @@ func collectIPv4(ctx context.Context, options CollectorOptions, sources collecti
 	return result, nil
 }
 
-func steadyHistory(previous, next history, expected Observation) bool {
+func recheckSessions(previous, next history, expected Observation, sessions []Session, leases []kea.Observation, scoped bool) bool {
 	if previous.scope.BootID != next.scope.BootID || previous.scope.ServiceUID != next.scope.ServiceUID ||
-		!slices.Equal(previous.scope.NASPrefixes, next.scope.NASPrefixes) || next.observedAt.Before(previous.observedAt) ||
-		!bytes.HasPrefix(next.data, previous.data) {
+		!slices.Equal(previous.scope.NASPrefixes, next.scope.NASPrefixes) || next.observedAt.Before(previous.observedAt) || !next.follows(previous) {
 		return false
 	}
-	observation, err := Replay(next.data, next.scope, next.observedAt)
-	return err == nil && observation.Withheld == expected.Withheld && slices.Equal(observation.Sessions, expected.Sessions)
+	observed, err := next.replay()
+	if err != nil {
+		return false
+	}
+	if !scoped {
+		return observed.DuplicateClaim == expected.DuplicateClaim && observed.Withheld == expected.Withheld && slices.Equal(observed.Sessions, expected.Sessions)
+	}
+	current := make(map[string]Session, len(observed.Sessions))
+	for _, session := range observed.Sessions {
+		current[session.MAC] = session
+	}
+	for i, session := range sessions {
+		newer, ok := current[session.MAC]
+		if ok && !newer.ObservedAt.Before(session.ObservedAt) {
+			// The original heartbeat and deadline stay in the published result.
+			newer.ObservedAt, newer.ValidUntil = session.ObservedAt, session.ValidUntil
+		}
+		if !ok || newer != session {
+			leases[i] = kea.Observation{}
+		}
+	}
+	return true
+}
+
+func (h history) replay() (Observation, error) {
+	if h.observation != nil {
+		return *h.observation, nil
+	}
+	return Replay(h.data, h.scope, h.observedAt)
+}
+func (h history) follows(previous history) bool {
+	if h.observation != nil {
+		return previous.observation != nil && h.parent == string(previous.data)
+	}
+	return bytes.HasPrefix(h.data, previous.data)
 }

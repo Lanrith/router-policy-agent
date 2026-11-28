@@ -89,7 +89,7 @@ func placementInterface(name string) bool {
 // network namespace. No probes, neighbor writes, arbitrary argv or cache files
 // are used. A deployment must explicitly qualify its host namespace boundary.
 func capturePlacement(ctx context.Context, options PlacementOptions) (observed placementObservation, result error) {
-	if ctx == nil || os.Geteuid() != 0 || !validPlacementOptions(options) {
+	if ctx == nil || !validPlacementOptions(options) {
 		return placementObservation{}, errors.New("radius: invalid privileged placement options")
 	}
 	ctx, cancel := context.WithTimeout(ctx, options.Timeout)

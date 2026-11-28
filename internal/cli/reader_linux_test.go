@@ -19,6 +19,8 @@ func TestRunReaderArgumentsAndRedaction(t *testing.T) {
 		{name: "help", args: []string{"-help"}, output: "Collect fresh LDAPS", code: 0},
 		{name: "version", args: []string{"-version"}, output: Version, code: 0},
 		{name: "missing directory", code: 2},
+		{name: "unknown provider stage", args: []string{"-config-directory", "/synthetic/private", "-check-provider", "other"}, code: 2},
+		{name: "empty provider stage", args: []string{"-config-directory", "/synthetic/private", "-check-provider="}, code: 2},
 		{name: "root directory", args: []string{"-config-directory", "/"}, code: 2},
 		{name: "relative directory", args: []string{"-config-directory", "private"}, code: 2},
 		{name: "unclean directory", args: []string{"-config-directory", "/synthetic/../private"}, code: 2},

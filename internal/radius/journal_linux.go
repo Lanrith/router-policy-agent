@@ -28,9 +28,11 @@ type JournalOptions struct {
 }
 
 type history struct {
-	data       []byte
-	scope      Scope
-	observedAt time.Time
+	observation *Observation
+	parent      string
+	data        []byte
+	scope       Scope
+	observedAt  time.Time
 }
 
 // captureHistory always reads the local system journal, oldest first. It has
@@ -38,7 +40,11 @@ type history struct {
 // Retained journal history is not a durable accounting database: missing Starts
 // deny, and retention/rotation must still be qualified for an installed service.
 func captureHistory(ctx context.Context, options JournalOptions) (captured history, result error) {
-	if ctx == nil || os.Geteuid() != 0 || options.Timeout <= 0 || options.Timeout > 10*time.Second {
+	return captureJournal(ctx, options, "", "", false)
+}
+
+func captureJournal(ctx context.Context, options JournalOptions, cursor string, extra string, incremental bool) (captured history, result error) {
+	if ctx == nil || options.Timeout <= 0 || options.Timeout > 10*time.Second {
 		return history{}, errors.New("radius: invalid privileged journal options")
 	}
 	ctx, cancel := context.WithTimeout(ctx, options.Timeout)
@@ -74,7 +80,7 @@ func captureHistory(ctx context.Context, options JournalOptions) (captured histo
 			captured = history{}
 		}
 	}()
-	data, err := runJournal(ctx, executable, scope)
+	data, err := runJournal(ctx, executable, scope, cursor, extra)
 	if err != nil {
 		return history{}, err
 	}
@@ -86,8 +92,10 @@ func captureHistory(ctx context.Context, options JournalOptions) (captured histo
 		return history{}, errors.New("radius: kernel boot changed during collection")
 	}
 	observedAt := time.Now().UTC()
-	if _, err := Replay(data, scope, observedAt); err != nil {
-		return history{}, err
+	if !incremental {
+		if _, err := Replay(data, scope, observedAt); err != nil {
+			return history{}, err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return history{}, err
@@ -108,7 +116,7 @@ func canonicalHistory(data []byte) ([]byte, error) {
 	for line := range bytes.Lines(data) {
 		count++
 		if count > maximumEvents {
-			return nil, errors.New("radius: journal event limit exceeded")
+			return nil, errBudget
 		}
 		entry := make(map[string]json.RawMessage)
 		if err := strictjson.Decode(bytes.TrimSuffix(line, []byte{'\n'}), &entry, maximumEntry); err != nil || entry == nil {
@@ -143,14 +151,14 @@ func currentBootID() (string, error) {
 func journalArguments(scope Scope) []string {
 	return []string{
 		"--system", "--no-pager", "--all", "--output=json", "--boot=" + scope.BootID,
-		"--output-fields=MESSAGE,_SYSTEMD_UNIT,SYSLOG_IDENTIFIER,_BOOT_ID,_UID,__REALTIME_TIMESTAMP,__CURSOR",
+		"--output-fields=MESSAGE,_SYSTEMD_UNIT,SYSLOG_IDENTIFIER,_BOOT_ID,_UID,__REALTIME_TIMESTAMP,__MONOTONIC_TIMESTAMP,__CURSOR",
 		"--grep=^" + marker,
 		"_SYSTEMD_UNIT=freeradius.service", "SYSLOG_IDENTIFIER=freeradius",
 		"_UID=" + strconv.FormatUint(uint64(scope.ServiceUID), 10),
 	}
 }
 
-func runJournal(ctx context.Context, executable *os.File, scope Scope) ([]byte, error) {
+func runJournal(ctx context.Context, executable *os.File, scope Scope, extra ...string) ([]byte, error) {
 	if ctx == nil || executable == nil || !validScope(scope) {
 		return nil, errors.New("radius: invalid journal invocation")
 	}
@@ -161,6 +169,11 @@ func runJournal(ctx context.Context, executable *os.File, scope Scope) ([]byte, 
 	// This argv builder admits only a validated boot ID and numeric service UID;
 	// every operation, source and filter is fixed. There is no shell or caller argv.
 	command.Args = append([]string{"journalctl"}, journalArguments(scope)...)
+	for _, arg := range extra {
+		if arg != "" {
+			command.Args = append(command.Args, arg)
+		}
+	}
 	command.ExtraFiles = []*os.File{executable}
 	command.Env = []string{"LC_ALL=C", "TZ=UTC", "PATH=/usr/bin", "SYSTEMD_COLORS=0"}
 	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
@@ -172,11 +185,18 @@ func runJournal(ctx context.Context, executable *os.File, scope Scope) ([]byte, 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := command.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 && stderr.buffer.Len() == 0 && stdout.buffer.Len() == 0 && !stderr.exceeded && ctx.Err() == nil {
+			return nil, nil
+		}
 		return nil, errors.Join(errors.New("radius: journal read failed"), ctx.Err())
 	}
 	// Even exit-zero warnings can describe inaccessible or skipped journal data.
 	// Keep diagnostics payload-free and never treat the retained prefix as whole.
-	if stdout.exceeded || stderr.buffer.Len() != 0 || stderr.exceeded {
+	if stdout.exceeded {
+		return nil, errBudget
+	}
+	if stderr.buffer.Len() != 0 || stderr.exceeded {
 		return nil, errors.New("radius: journal read incomplete or oversized")
 	}
 	if err := ctx.Err(); err != nil {

@@ -10,9 +10,9 @@ import (
 )
 
 // CoreEgress describes a generated service dependency, never an owner access
-// rule. Kind fixes the protocol and listener: recursive DNS (TCP/UDP 53), NTP
-// (UDP 123), NTP's numeric DNS fallback (TCP/UDP 53), RADIUS proxying
-// (UDP 1812), or log export (TCP 443).
+// rule. Kind fixes the protocol and port. DNS uses TCP/UDP 53 and DNS over TLS
+// uses TCP 853. NTP uses UDP 123, its numeric DNS fallback uses TCP/UDP 53,
+// RADIUS proxying uses UDP 1812, and log export uses TCP 443.
 // TranslatedAddresses are exact immutable uplink addresses when Masquerade is
 // true. An empty list represents dynamic uplink addressing; activating that
 // geometry additionally requires a qualified live uplink-address producer.
@@ -57,6 +57,9 @@ func validateCoreEgress(b Baseline, interfaces map[string]bool) error {
 		}{path.Kind, path.Address}
 		component := path.Kind
 		switch component {
+		case "dns_tls":
+			component = "dns"
+			key.kind = "dns"
 		case "ntp_dns":
 			component = "ntp"
 		case "radius_proxy":
@@ -65,7 +68,7 @@ func validateCoreEgress(b Baseline, interfaces map[string]bool) error {
 			component = "logs"
 		}
 		isInternal := path.Kind == "radius_proxy" || path.Kind == "logs"
-		if !slices.Contains([]string{"dns", "ntp", "ntp_dns", "radius_proxy", "logs"}, path.Kind) || seen[key] || !safeInterface(path.Interface) || interfaces[path.Interface] || link != "" && path.Interface != link || len(path.Destinations) == 0 || len(path.Destinations) > 16 || len(path.TranslatedAddresses) > 8 || !path.Masquerade && len(path.TranslatedAddresses) != 0 || isInternal != (path.DestinationInterface != "") || isInternal && (!safeInterface(path.DestinationInterface) || !interfaces[path.DestinationInterface] || path.Masquerade) {
+		if !slices.Contains([]string{"dns", "dns_tls", "ntp", "ntp_dns", "radius_proxy", "logs"}, path.Kind) || seen[key] || !safeInterface(path.Interface) || interfaces[path.Interface] || link != "" && path.Interface != link || len(path.Destinations) == 0 || len(path.Destinations) > 16 || len(path.TranslatedAddresses) > 8 || !path.Masquerade && len(path.TranslatedAddresses) != 0 || isInternal != (path.DestinationInterface != "") || isInternal && (!safeInterface(path.DestinationInterface) || !interfaces[path.DestinationInterface] || path.Masquerade) {
 			return errors.New("policy: invalid or ambiguous core dependency")
 		}
 		seen[key], link = true, path.Interface
@@ -86,22 +89,28 @@ func validateCoreEgress(b Baseline, interfaces map[string]bool) error {
 		}
 		destinations := map[netip.Prefix]bool{}
 		for _, prefix := range path.Destinations {
-			exactDestination := path.Kind == "ntp_dns" || isInternal
+			// A DNS dependency uses either one default route for iteration or a
+			// list of numeric forwarders. A default mixed with hosts is ambiguous.
+			numericResolver := path.Kind == "dns_tls" || path.Kind == "ntp_dns" || path.Kind == "dns" && prefix.Bits() != 0
+			if path.Kind == "dns" && !numericResolver && len(path.Destinations) != 1 {
+				return errors.New("policy: mixed iterative and forward DNS destinations")
+			}
+			exactDestination := numericResolver || isInternal
 			if !prefix.IsValid() || prefix != prefix.Masked() || prefix.Addr().Is4In6() || prefix.Addr().BitLen() != path.Address.BitLen() || destinations[prefix] || exactDestination && prefix.Bits() != prefix.Addr().BitLen() || !exactDestination && prefix.Bits() != 0 {
 				return errors.New("policy: invalid core dependency destination")
 			}
-			if path.Kind == "ntp_dns" {
+			if numericResolver {
 				if !validAddress(prefix.Addr()) {
-					return errors.New("policy: invalid numeric NTP resolver")
+					return errors.New("policy: invalid numeric resolver")
 				}
 				for _, zone := range b.Zones {
 					if inPrefixes(prefix.Addr(), zone.Networks) {
-						return errors.New("policy: fallback resolver requires uplink reachability")
+						return errors.New("policy: numeric resolver requires uplink reachability")
 					}
 				}
 				for _, block := range b.ProtectedNetworks {
 					if inPrefixes(prefix.Addr(), block.Networks) {
-						return errors.New("policy: fallback resolver overlaps a protected allocation")
+						return errors.New("policy: numeric resolver overlaps a protected allocation")
 					}
 				}
 			}

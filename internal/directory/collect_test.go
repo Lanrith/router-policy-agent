@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -321,6 +322,50 @@ func TestPagingIsCompleteCriticalAndBounded(t *testing.T) {
 			entries, err := reader.pages(t.Context(), client, "groups", 16)
 			if !errors.Is(err, ErrRead) || entries != nil || strings.Contains(err.Error(), "private diagnostic") {
 				t.Fatalf("partial paging escaped: %d, %v", len(entries), err)
+			}
+		})
+	}
+}
+
+func TestProviderQualificationRequiresObservedPageShape(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		requirement pageRequirement
+		pages       []int
+		pass        bool
+	}{
+		{"single complete", onePopulatedPage, []int{1}, true},
+		{"single empty", onePopulatedPage, []int{0}, false},
+		{"single continued", onePopulatedPage, []int{1, 1}, false},
+		{"multiple populated", multiplePopulatedPages, []int{1, 1}, true},
+		{"accounts could fit on one page", multiplePopulatedPages, []int{1}, false},
+		{"empty terminal page only", multiplePopulatedPages, []int{1, 0}, false},
+		{"ignored requested page size", multiplePopulatedPages, []int{2, 1}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := fixtureReader(t)
+			r.config.PageSize = 1
+			r.checkPages = test.requirement
+			pageIndex := 0
+			entryID := 0
+			client := searchFunc(func(*ldap.SearchRequest) (*ldap.SearchResult, error) {
+				size := test.pages[pageIndex]
+				entries := make([]*ldap.Entry, size)
+				for i := range entries {
+					entryID++
+					entries[i] = ldap.NewEntry("cn=synthetic-"+strconv.Itoa(entryID)+",ou=users,"+fixtureBase, nil)
+				}
+				pageIndex++
+				paging := ldap.NewControlPaging(1)
+				if pageIndex < len(test.pages) {
+					paging.SetCookie([]byte(strconv.Itoa(pageIndex)))
+				}
+				return &ldap.SearchResult{Entries: entries, Controls: []ldap.Control{paging}}, nil
+			})
+
+			entries, err := r.pages(t.Context(), client, "users", 16)
+			if (err == nil) != test.pass || err != nil && entries != nil {
+				t.Fatal("unexpected page qualification result")
 			}
 		})
 	}

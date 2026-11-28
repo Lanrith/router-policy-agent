@@ -197,6 +197,15 @@ func TestIncompleteBindingsSealAndDoNotReviveDirectoryGrants(t *testing.T) {
 	if len(f.firewall.active) != 1 {
 		t.Fatal("valid initial fixture grant missing")
 	}
+	// The producer keeps the original generation visible while collecting,
+	// then commits a complete generation of the same bounded evidence.
+	deadline := f.firewall.active[0].ExpiresAt()
+	for _, generation := range []string{f.bindings.Generation, "refreshed-same-owner"} {
+		f.bindings.Generation = generation
+		if err := engine.RefreshBindings(t.Context()); err != nil || len(f.firewall.active) != 1 || f.firewall.active[0].ExpiresAt() != deadline {
+			t.Fatal("complete refresh interrupted or extended an existing grant", err)
+		}
+	}
 	f.sourceError = binding.ErrIncomplete
 	if err := engine.RefreshBindings(t.Context()); !errors.Is(err, ErrBindingsPending) {
 		t.Fatal("successfully sealed incomplete evidence was not classified", err)

@@ -64,6 +64,10 @@ def main():
                     observed = run(str(binary), '-version', capture_output=True, text=True).stdout.strip()
                     if observed != args.version:
                         raise ValueError('Binary version does not match release')
+                if package == 'router-policy-collector':
+                    marker = root/'usr/share/router-policy-agent/binding-worker-v1'
+                    marker.parent.mkdir(parents=True)
+                    marker.write_text('binding-worker-v1\n')
                 shutil.copyfile('LICENSE', root/('usr/share/doc/'+package+'/copyright'))
                 shutil.copyfile(notices, root/('usr/share/doc/'+package+'/THIRD-PARTY-NOTICES'))
                 (root/'DEBIAN/control').write_text(

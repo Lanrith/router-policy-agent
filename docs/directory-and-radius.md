@@ -15,10 +15,9 @@ again on each call; it caches neither credentials nor directory entries.
 Concurrent calls use separate connections. A shared credential callback must
 itself be safe for concurrent use and honor its context.
 
-By default, only explicit `ldaps://host:port` endpoints are accepted. TLS verifies both the
-certificate chain and hostname, using system roots or a cloned deployment CA
-pool, with TLS 1.2 as the minimum. There is no disabled-verification option,
-plaintext fallback, referral following or StartTLS implementation. Connection, bind and
+Use an explicit `ldaps://host:port` or `ldap+starttls://host:port` endpoint.
+The reader verifies the certificate chain and hostname against system roots or
+a cloned deployment CA pool and requires TLS 1.2 or later before binding. Connection, bind and
 all searches share a deadline of at most ten seconds. Cancellation closes the
 socket and joins LDAP cleanup. Errors expose a fixed collection failure and,
 where applicable, cancellation, not server diagnostics or private endpoints.
@@ -101,6 +100,42 @@ authority or freshness. Before connecting this library to enforcement:
 Provider configuration, credentials, CA material and these operational records
 remain private. This library does not change provider settings or permissions.
 
+### Qualify a provider build
+
+In an isolated copy of the selected provider, record its running artifact digest,
+search mode and reader/helper binary digests. Keep its intended ACLs and attribute
+mappings. Use a synthetic base with two original groups (placement and access),
+an active MAC account and a second account. Give the MAC both direct memberships
+and valid ownership evidence for exactly one test grant. Run each command as the
+non-root reader with its polling process paused and the disposable enforcing
+helper available. Each successful check submits a fresh snapshot to that helper.
+
+```sh
+router-policy-reader -config-directory /run/router-policy-reader -check-provider single-page
+router-policy-reader -config-directory /run/router-policy-reader -check-provider multi-page
+```
+
+The first command requests the normal 256 entries per page and requires one
+populated page for each OU. The second requests one entry per page and requires
+at least two populated pages in each OU. Both require terminal paging controls
+and an applied receipt with a positive grant count. Confirm the expected grant
+in the disposable firewall and verify its original expiry. Interrupt an account
+continuation after the group search succeeds and rerun the second command. It
+must fail with `collection_failed`, with the same previously applied deadline.
+Restore paging and remove the MAC's access-group membership on both directory
+edges while retaining its placement and current ownership evidence. Check the withdrawal with the final command.
+
+```sh
+router-policy-reader -config-directory /run/router-policy-reader -check-provider withdrawn
+```
+
+Require exit zero, an applied zero-grant receipt and removal of the synthetic
+grant from the firewall. Keep the exit status, bounded JSON result and the
+tested digests and mode together. Check each change to the provider build,
+search mode, visible schema or policy-reader version in the same way. The
+single-stage command reports an unexpected grant count as failure even when
+the helper successfully applied that collection.
+
 ## Reader command
 
 Build `cmd/router-policy-reader` with `make build`, then run it under the
@@ -127,7 +162,7 @@ directory rather than granting the process access to privileged configuration.
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Must be `1`. |
-| `directory_url` | Explicit verified `ldaps://host:port`, with no credentials, path, query or fallback. |
+| `directory_url` | Explicit verified `ldaps://host:port` or `ldap+starttls://host:port` endpoint. |
 | `base_dn` | The separately authorized provider namespace. |
 | `helper_socket` | Clean absolute request-socket path, at most 107 bytes. Its filesystem ownership and root peer UID are checked before sending. |
 | `custom_ca` | If true, use only the checked `ca.pem` in this directory; otherwise use system roots. |
@@ -153,13 +188,17 @@ storage; never commit them or bake them into an image. Clearing the input byte
 buffer is not a guarantee that the Go/LDAP runtime erases all secret copies.
 
 The first poll starts immediately. Subsequent polls target 30 seconds from the
-previous attempt's start, without overlap or catch-up bursts. Collection and
-submission share one ten-second deadline. Search caps remain 256 entries per
+previous attempt's start, without overlap or catch-up bursts. Collection has
+ten seconds. After a complete read the reader allows twelve seconds for
+submission, including the
+helper's maximum ten-second request and two seconds for client work, queueing
+and receipt delivery. The whole attempt has a 22-second cutoff. A shorter
+caller deadline or cancellation applies throughout. Search caps remain 256 entries per
 page, 4,096 accounts and 8,192 groups. The helper independently rechecks the
 snapshot, original observation age, authoritative bindings and protected floor.
 The reader never caches a snapshot, resets its observation time, retries a lost
-receipt or submits a partial collection. A failed poll grants nothing new; old
-permits expire under the helper's independently enforced lease.
+receipt or submits a partial collection. A missing receipt leaves the
+commit outcome unknown. Any installed permit keeps its original expiry.
 
 Runtime stdout is unused. Stderr receives one JSON outcome per completed
 attempt: `collection_failed`, `submission_failed`, `rejected`, `shadow` or
@@ -170,7 +209,7 @@ diagnostics. A diagnostic-write failure stops the reader. SIGINT/SIGTERM cancel
 and join in-flight collection/submission. Exit 0 means help/version or orderly
 cancellation, 1 means startup/runtime failure, and 2 means invalid arguments.
 
-Tests cover bounded file parsing, atomic credential rotation, shared deadlines,
+Tests cover bounded file parsing, atomic credential rotation, phase deadlines,
 failed-read/lost-receipt recovery, fixed diagnostics and cancellation. An isolated
 root test runner also launches the configured command as UID 65534 against an
 in-memory synthetic TLS directory and a root-owned UID-checked helper socket.

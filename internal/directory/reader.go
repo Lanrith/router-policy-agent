@@ -45,9 +45,18 @@ type Credentials struct {
 	Password string `json:"-"`
 }
 
+type pageRequirement uint8
+
+const (
+	ordinaryRead pageRequirement = iota
+	onePopulatedPage
+	multiplePopulatedPages
+)
+
 // Reader owns immutable connection configuration, but caches no directory data.
 // Concurrent collections use separate bounded connections and snapshots.
 type Reader struct {
+	checkPages  pageRequirement
 	config      Config
 	address     string
 	hostname    string
@@ -106,6 +115,22 @@ func validTransport(config Config, scheme, host string, now time.Time) bool {
 
 type searcher interface {
 	Search(*ldap.SearchRequest) (*ldap.SearchResult, error)
+}
+
+// CheckProvider reads a complete synthetic policy fixture over verified TLS.
+// A one-entry page size must exercise a continuation with entries in both
+// namespaces. The ordinary page size must complete both in one nonempty page.
+func (r *Reader) CheckProvider(ctx context.Context, multiplePages bool) (policy.DirectorySnapshot, error) {
+	if r == nil || !r.config.PlaintextUntil.IsZero() {
+		return policy.DirectorySnapshot{}, ErrRead
+	}
+	check := *r
+	check.checkPages = onePopulatedPage
+	if multiplePages {
+		check.checkPages = multiplePopulatedPages
+		check.config.PageSize = 1
+	}
+	return check.Collect(ctx)
 }
 
 // Collect returns a complete bounded snapshot or no snapshot at all.

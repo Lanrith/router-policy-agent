@@ -35,6 +35,7 @@ func TestLoopAlwaysRecollectsAndNeverReplaysFailedSubmission(t *testing.T) {
 		var diagnostics bytes.Buffer
 		var collections, submissions atomic.Int64
 		observations := []time.Time{}
+		commits := make(chan time.Time, 2)
 		collect := func(context.Context) (policy.DirectorySnapshot, error) {
 			count := collections.Add(1)
 			snapshot := testSnapshot(time.Now().UTC())
@@ -45,13 +46,17 @@ func TestLoopAlwaysRecollectsAndNeverReplaysFailedSubmission(t *testing.T) {
 			observations = append(observations, snapshot.ObservedAt)
 			return snapshot, nil
 		}
-		submit := func(_ context.Context, snapshot policy.DirectorySnapshot) (ipc.Receipt, error) {
+		submit := func(ctx context.Context, snapshot policy.DirectorySnapshot) (ipc.Receipt, error) {
 			count := submissions.Add(1)
 			if !reflect.DeepEqual(snapshot, testSnapshot(observations[count-1])) {
 				t.Error("snapshot changed between collection and submission")
 			}
+			// Model a successful commit followed by a missing receipt. The lease
+			// is anchored to collection and survives independently in the helper.
+			commits <- snapshot.ObservedAt.Add(90 * time.Second)
 			if count == 1 {
-				return testReceipt(ipc.StatusApplied), errors.New("synthetic-private-lost-receipt")
+				<-ctx.Done()
+				return ipc.Receipt{}, ctx.Err()
 			}
 			return testReceipt(ipc.StatusApplied), nil
 		}
@@ -61,8 +66,12 @@ func TestLoopAlwaysRecollectsAndNeverReplaysFailedSubmission(t *testing.T) {
 		if collections.Load() != 1 || submissions.Load() != 1 {
 			t.Fatal("startup did not make exactly one collection and submission")
 		}
+		firstExpiry := <-commits
 		time.Sleep(refreshInterval)
 		synctest.Wait()
+		if len(commits) != 0 || time.Until(firstExpiry) != 60*time.Second {
+			t.Fatal("the missing receipt or failed collection moved the committed lease")
+		}
 		if collections.Load() != 2 || submissions.Load() != 1 {
 			t.Fatal("failed collection submitted or lost receipt retried")
 		}
@@ -92,34 +101,46 @@ func TestLoopAlwaysRecollectsAndNeverReplaysFailedSubmission(t *testing.T) {
 	})
 }
 
-func TestCycleSharesDeadlineAndPreservesObservationAge(t *testing.T) {
+func TestCycleReservesTimeForHelperReceipt(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		started := time.Now()
-		var observedDeadline time.Time
 		original := testSnapshot(started.UTC())
 		collect := func(ctx context.Context) (policy.DirectorySnapshot, error) {
-			deadline, ok := ctx.Deadline()
-			if !ok {
-				t.Error("collection has no deadline")
-			}
-			observedDeadline = deadline
 			time.Sleep(9 * time.Second)
-			return original, nil
+			return original, ctx.Err()
 		}
 		submit := func(ctx context.Context, snapshot policy.DirectorySnapshot) (ipc.Receipt, error) {
-			deadline, ok := ctx.Deadline()
-			if !deadline.Equal(observedDeadline) || !ok || deadline.Sub(started) != cycleTimeout ||
-				!reflect.DeepEqual(snapshot, original) {
-				t.Error("submission renewed the collection budget or observation timestamp")
+			if !reflect.DeepEqual(snapshot, original) {
+				t.Fatal("submission changed the original evidence")
 			}
+			time.Sleep(11 * time.Second)
+			return testReceipt(ipc.StatusApplied), ctx.Err()
+		}
+		result, err := runCycle(t.Context(), collect, submit)
+		if err != nil || result.Outcome != "applied" || result.GrantCount != 2 ||
+			time.Since(started) != 20*time.Second {
+			t.Fatalf("slow collection and timely submission returned %#v, %v", result, err)
+		}
+	})
+}
+
+func TestCycleRejectsLateReceipt(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		started := time.Now()
+		collect := func(context.Context) (policy.DirectorySnapshot, error) {
+			time.Sleep(9 * time.Second)
+			return testSnapshot(started.UTC()), nil
+		}
+		submit := func(ctx context.Context, _ policy.DirectorySnapshot) (ipc.Receipt, error) {
 			<-ctx.Done()
 			return testReceipt(ipc.StatusApplied), nil
 		}
 		result, err := runCycle(t.Context(), collect, submit)
 		if err != nil || result.Outcome != "submission_failed" || result.GrantCount != 0 ||
-			time.Since(started) != cycleTimeout {
-			t.Fatal("late submission was logged as applied or exceeded its shared deadline")
+			time.Since(started) != 21*time.Second {
+			t.Fatalf("late receipt returned %#v, %v after %v", result, err, time.Since(started))
 		}
 	})
 }
@@ -244,5 +265,36 @@ func TestLoopRejectsInvalidDependenciesAndOutputFailure(t *testing.T) {
 	cancel()
 	if err := runLoop(ctx, collect, submit, io.Discard); !errors.Is(err, context.Canceled) {
 		t.Fatal("already-canceled loop started work")
+	}
+}
+
+func TestProviderCheckRequiresFreshAppliedReceipt(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		status    ipc.Status
+		grants    int
+		withdrawn bool
+		pass      bool
+	}{
+		{"positive applied", ipc.StatusApplied, 1, false, true},
+		{"positive absent", ipc.StatusApplied, 0, false, false},
+		{"positive shadow", ipc.StatusShadow, 1, false, false},
+		{"withdrawal", ipc.StatusApplied, 0, true, true},
+		{"grant still present", ipc.StatusApplied, 1, true, false},
+		{"shadow zero", ipc.StatusShadow, 0, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			collect := func(context.Context) (policy.DirectorySnapshot, error) {
+				return policy.DirectorySnapshot{ObservedAt: time.Now().UTC(), Complete: true}, nil
+			}
+			submit := func(context.Context, policy.DirectorySnapshot) (ipc.Receipt, error) {
+				receipt := testReceipt(test.status)
+				receipt.GrantCount = test.grants
+				return receipt, nil
+			}
+			if err := checkProviderReceipt(t.Context(), collect, submit, io.Discard, test.withdrawn); (err == nil) != test.pass {
+				t.Fatal("unexpected provider qualification from helper receipt")
+			}
+		})
 	}
 }
