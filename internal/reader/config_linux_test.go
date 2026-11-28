@@ -293,3 +293,57 @@ func FuzzReaderConfig(f *testing.F) {
 		}
 	})
 }
+
+func TestCheckConfigOffline(t *testing.T) {
+	t.Parallel()
+	const mapping = `"mapping":{
+		"users_base_dn":"ou=People,dc=example,dc=test","groups_base_dn":"ou=Roles,dc=example,dc=test",
+		"user_object_class":"inetOrgPerson","group_object_class":"groupOfNames",
+		"user_id":"entryUUID","group_id":"entryUUID","user_rdn":"uid","group_rdn":"cn",
+		"device_mac":"macAddress","device_active":"employeeType","active_value":"enabled","inactive_value":"disabled",
+		"group_name":"cn","group_member":"member","group_policy":"description"}`
+	mapped := strings.TrimSuffix(syntheticConfig, "}") + `,"search_mode":"paged",` + mapping + "}"
+	legacyBind := "cn=reader,ou=users,dc=example,dc=test"
+	mappedBind := "uid=Lookup,ou=Services,dc=example,dc=test"
+	outside := "uid=Lookup,dc=foreign"
+	badType := "some type=Lookup,ou=users,dc=example,dc=test"
+	for _, test := range []struct {
+		name   string
+		config string
+		bindDN *string
+		valid  bool
+	}{
+		{name: "no private CA or credential needed", config: strings.Replace(syntheticConfig, "false", "true", 1), valid: true},
+		{name: "optional legacy identity", config: syntheticConfig, bindDN: &legacyBind, valid: true},
+		{name: "legacy identity under wrong branch", config: syntheticConfig, bindDN: &mappedBind},
+		{name: "invalid bind naming attribute", config: syntheticConfig, bindDN: &badType},
+		{name: "mapped identity under separate branch", config: mapped, bindDN: &mappedBind, valid: true},
+		{name: "mapped identity outside namespace", config: mapped, bindDN: &outside},
+		{name: "unparseable namespace", config: strings.Replace(syntheticConfig, "dc=example,dc=test", "not-a-dn", 1)},
+		{name: "unescaped control in namespace", config: strings.Replace(syntheticConfig, "dc=example", `dc=exam\nple`, 1)},
+		{name: "malformed search base type", config: strings.Replace(mapped, "ou=People", "some type=People", 1)},
+		{name: "search base outside namespace", config: strings.Replace(mapped, "ou=People,dc=example", "ou=People,dc=foreign", 1)},
+		{name: "ambiguous group attribute", config: strings.Replace(mapped, `"group_policy":"description"`, `"group_policy":"member"`, 1)},
+		{name: "duplicate key", config: strings.Replace(mapped, `"search_mode":"paged"`, `"search_mode":"paged","search_mode":"auto"`, 1)},
+		{name: "expired transport", config: strings.ReplaceAll(strings.TrimSuffix(syntheticConfig, "}")+`,"plaintext_until":"2000-01-01T00:00:00Z"}`, "ldaps://directory.example.test:636", "ldap://127.0.0.1:389")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := CheckConfig(strings.NewReader(test.config), test.bindDN)
+			if (err == nil) != test.valid {
+				t.Fatal("incorrect offline validation result")
+			}
+		})
+	}
+
+	padded := syntheticConfig + strings.Repeat(" ", maximumConfig-len(syntheticConfig))
+	if err := CheckConfig(strings.NewReader(padded), nil); err != nil {
+		t.Fatal("document at the input limit rejected")
+	}
+	input := strings.NewReader(padded + "more data")
+	if err := CheckConfig(input, nil); !errors.Is(err, errRuntime) || input.Len() != len("more data")-1 {
+		t.Fatal("oversized input was accepted or read beyond the bound")
+	}
+	if err := CheckConfig(nil, nil); !errors.Is(err, errRuntime) {
+		t.Fatal("missing input was accepted")
+	}
+}

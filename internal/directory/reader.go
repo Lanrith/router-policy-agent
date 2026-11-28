@@ -73,6 +73,30 @@ type Reader struct {
 // credentials must provide the separately authorized scoped read identity and
 // honor cancellation. It must be safe for concurrent use if the Reader is shared.
 func New(config Config, credentials func(context.Context) (Credentials, error)) (*Reader, error) {
+	if credentials == nil {
+		return nil, errors.New("directory: missing credential source")
+	}
+	reader, err := prepare(config)
+	if err != nil {
+		return nil, err
+	}
+	reader.credentials = credentials
+	return reader, nil
+}
+
+// CheckConfig runs the same static checks as New and optionally validates the
+// lookup identity against the selected namespace. No credentials or I/O are used.
+func CheckConfig(config Config, bindDN *string) error {
+	if _, err := prepare(config); err != nil {
+		return err
+	}
+	if bindDN != nil && !validBindDN(*bindDN, config.BaseDN, config.Mapping != nil) {
+		return errors.New("directory: invalid bind identity")
+	}
+	return nil
+}
+
+func prepare(config Config) (*Reader, error) {
 	endpoint, err := url.Parse(config.URL)
 	if err != nil || endpoint == nil {
 		return nil, errors.New("directory: invalid endpoint")
@@ -88,13 +112,12 @@ func New(config Config, credentials func(context.Context) (Credentials, error)) 
 	if !validTransport(config, endpoint.Scheme, host, time.Now().UTC()) {
 		return nil, errors.New("directory: invalid or expired transport policy")
 	}
-	base, parseErr := ldap.ParseDN(config.BaseDN)
-	isBadNamespace := parseErr != nil || base == nil || len(base.RDNs) == 0 || len(config.BaseDN) > 1024
+	base, validBase := parseConfigDN(config.BaseDN, 1024)
 	isBadTimeout := config.Timeout <= 0 || config.Timeout > 10*time.Second
 	isBadCapacity := config.MaximumDevices <= 0 || config.MaximumDevices > 4096 ||
 		config.MaximumGroups <= 0 || config.MaximumGroups > 8192
 	isBadPaging := config.PageSize == 0 || config.PageSize > 256
-	if credentials == nil || isBadNamespace || isBadTimeout || isBadCapacity || isBadPaging {
+	if !validBase || isBadTimeout || isBadCapacity || isBadPaging {
 		return nil, errors.New("directory: invalid namespace, timing or collection limits")
 	}
 	switch config.SearchMode {
@@ -117,7 +140,7 @@ func New(config Config, credentials func(context.Context) (Credentials, error)) 
 	}
 	return &Reader{
 		config: config, mapping: mapping, address: endpoint.Host, hostname: host,
-		credentials: credentials, now: time.Now,
+		now: time.Now,
 	}, nil
 }
 
@@ -275,16 +298,21 @@ func safeSearch(client searcher, request *ldap.SearchRequest) (result *ldap.Sear
 }
 
 func validCredentials(credentials Credentials, baseDN string, mapped bool) bool {
-	if credentials.Password == "" || len(credentials.Password) > 4096 || credentials.BindDN == "" || len(credentials.BindDN) > 2048 || strings.IndexByte(credentials.BindDN, 0) >= 0 {
+	return credentials.Password != "" && len(credentials.Password) <= 4096 &&
+		validBindDN(credentials.BindDN, baseDN, mapped)
+}
+
+func validBindDN(bindDN, baseDN string, mapped bool) bool {
+	dn, ok := parseConfigDN(bindDN, 2048)
+	if !ok {
 		return false
 	}
-	dn, err := ldap.ParseDN(credentials.BindDN)
 	if mapped {
 		base, baseErr := ldap.ParseDN(baseDN)
-		return err == nil && baseErr == nil && dn != nil && base != nil && base.AncestorOf(dn)
+		return baseErr == nil && base != nil && base.AncestorOf(dn)
 	}
 	base, baseErr := ldap.ParseDN("ou=users," + baseDN)
-	return err == nil && baseErr == nil && dn != nil && base != nil &&
+	return baseErr == nil && base != nil &&
 		len(dn.RDNs) == len(base.RDNs)+1 && base.AncestorOfFold(dn)
 }
 

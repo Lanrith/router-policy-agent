@@ -22,8 +22,9 @@ import (
 // Version is set by the release build; development builds report dev.
 var Version = "dev"
 
-// CheckIO allows tests to capture output without process-global redirection.
+// CheckIO supplies command streams without process-global redirection.
 type CheckIO struct {
+	In  io.Reader
 	Out io.Writer
 	Err io.Writer
 }

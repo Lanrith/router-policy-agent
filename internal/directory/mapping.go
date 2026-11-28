@@ -87,12 +87,27 @@ func defaultMapping(base string) Mapping {
 
 func validLDAPName(name string) bool { return len(name) <= 127 && ldapName.MatchString(name) }
 
-func scopedBase(raw string, base *ldap.DN) (*ldap.DN, bool) {
-	if raw == "" || len(raw) > 1024 || !utf8.ValidString(raw) || strings.IndexFunc(raw, unicode.IsControl) >= 0 {
+func parseConfigDN(raw string, maximum int) (*ldap.DN, bool) {
+	if raw == "" || len(raw) > maximum || !utf8.ValidString(raw) || strings.IndexFunc(raw, unicode.IsControl) >= 0 {
 		return nil, false
 	}
 	dn, err := ldap.ParseDN(raw)
-	return dn, err == nil && dn != nil && len(dn.RDNs) > 0 && (base.Equal(dn) || base.AncestorOf(dn))
+	if err != nil || dn == nil || len(dn.RDNs) == 0 {
+		return nil, false
+	}
+	for _, rdn := range dn.RDNs {
+		for _, attribute := range rdn.Attributes {
+			if !validLDAPName(attribute.Type) {
+				return nil, false
+			}
+		}
+	}
+	return dn, true
+}
+
+func scopedBase(raw string, base *ldap.DN) (*ldap.DN, bool) {
+	dn, ok := parseConfigDN(raw, 1024)
+	return dn, ok && (base.Equal(dn) || base.AncestorOf(dn))
 }
 
 func attributesDistinct(ordinary, authority []string) bool {

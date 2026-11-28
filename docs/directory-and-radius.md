@@ -214,6 +214,19 @@ the helper successfully applied that collection.
 
 ## Reader command
 
+For an offline build check, pipe the generated `reader.json` into the reader
+binary that will run on the router. Supply the optional lookup DN to check its
+scope against `base_dn` and the selected mapping.
+
+```sh
+router-policy-reader -check-config -check-bind-dn "$bind_dn" < reader.json
+```
+
+A successful check prints `{"result":"pass"}`. Invalid configuration exits
+with status 1. The check uses the production parser and transport and mapping
+rules. Credential loading, CA verification and directory and helper connections
+happen separately at runtime.
+
 Build `cmd/router-policy-reader` with `make build`, then run it under the
 separately provisioned non-root reader identity:
 

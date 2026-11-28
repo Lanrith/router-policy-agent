@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"time"
 
 	"github.com/lanrith/router-policy-agent/internal/directory"
 	"github.com/lanrith/router-policy-agent/internal/hostfs"
@@ -111,20 +110,7 @@ func loadReader(ctx context.Context, root *os.Root, owner uint32) (*directory.Re
 	if err != nil {
 		return nil, "", errRuntime
 	}
-	options := directory.Config{
-		URL: configuration.DirectoryURL, BaseDN: configuration.BaseDN,
-		Mapping: configuration.Mapping,
-		Timeout: collectionTimeout, PageSize: 256, MaximumDevices: 4096, MaximumGroups: 8192,
-	}
-	if configuration.SearchMode != nil {
-		options.SearchMode = *configuration.SearchMode
-	}
-	if configuration.PlaintextUntil != "" {
-		options.PlaintextUntil, err = time.Parse(time.RFC3339Nano, configuration.PlaintextUntil)
-		if err != nil {
-			return nil, "", errRuntime
-		}
-	}
+	options := configuration.directoryConfig()
 	if configuration.CustomCA {
 		options.RootCAs, err = readCA(ctx, root, owner)
 		if err != nil {
