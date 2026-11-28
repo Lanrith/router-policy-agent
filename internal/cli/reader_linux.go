@@ -39,9 +39,9 @@ func runReader(ctx context.Context, args []string, streams CheckIO, run readerFu
 		"",
 		"private reader-owned directory with reader.json and runtime credentials.json (required)",
 	)
-	flags.Func("check-provider", "qualify one synthetic provider stage (single-page, multi-page, or withdrawn)", func(stage string) error {
+	flags.Func("check-provider", "qualify one synthetic provider stage (single-page, multi-page, withdrawn, unpaged, or unpaged-withdrawn)", func(stage string) error {
 		switch stage {
-		case "single-page", "multi-page", "withdrawn":
+		case "single-page", "multi-page", "withdrawn", "unpaged", "unpaged-withdrawn":
 			check = stage
 			return nil
 		default:

@@ -470,3 +470,109 @@ func TestLDAPSRejectsMalformedResponsesWithoutParserPanic(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifiedOrdinarySearchRequiresSuccessfulCompletion(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		partial    bool
+		closeEarly bool
+		code       uint64
+		ok         bool
+	}{
+		{name: "complete Authentik layout", ok: true},
+		{name: "time limited after an entry", partial: true, code: ldap.LDAPResultTimeLimitExceeded},
+		{name: "disconnected after an entry", partial: true, closeEarly: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			certificate, roots := fixtureTLS(t, "valid")
+			server := startWireFixture(t, certificate, func(_ context.Context, c *tls.Conn) error {
+				id, _, _, err := readWire(c)
+				if err != nil {
+					return err
+				}
+				if err := sendWire(c, wireResult(id, 1, ldap.LDAPResultSuccess)); err != nil {
+					return err
+				}
+				g, u := fixtureEntries()
+				for i, entry := range []*ldap.Entry{g[0], u[0]} {
+					id, req, packet, err := readWire(c)
+					if err != nil {
+						return err
+					}
+					if req.Tag != 3 || len(packet.Children) != 2 {
+						return errors.New("expected an ordinary LDAP search")
+					}
+					if err := sendWire(c, wireEntry(id, entry)); err != nil {
+						return err
+					}
+					if i == 1 && test.partial {
+						if test.closeEarly {
+							return nil
+						}
+						return sendWire(c, wireResult(id, 5, test.code))
+					}
+					if err := sendWire(c, wireResult(id, 5, ldap.LDAPResultSuccess)); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			cfg := fixtureConfig()
+			cfg.URL = "ldaps://" + server.listener.Addr().String()
+			cfg.RootCAs = roots
+			cfg.SearchMode = ""
+			r, err := New(cfg, fixtureReader(t).credentials)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := r.Collect(t.Context())
+			if (err == nil) != test.ok || got.Complete != test.ok || test.ok && (len(got.Devices) != 1 || !got.Devices[0].Active) {
+				t.Fatalf("unexpected collection result: complete=%v err=%v", got.Complete, err)
+			}
+		})
+	}
+}
+
+func TestLDAPSSubtreeWithRawStableIDs(t *testing.T) {
+	m, group, device := flaggedEntries("512")
+	certificate, roots := fixtureTLS(t, "valid")
+	server := startWireFixture(t, certificate, func(_ context.Context, c *tls.Conn) error {
+		id, _, _, err := readWire(c)
+		if err != nil {
+			return err
+		}
+		if err := sendWire(c, wireResult(id, 1, ldap.LDAPResultSuccess)); err != nil {
+			return err
+		}
+		for _, entry := range []*ldap.Entry{group, device} {
+			id, search, packet, err := readWire(c)
+			if err != nil {
+				return err
+			}
+			if len(packet.Children) != 2 || search.Tag != 3 || len(search.Children) != 8 || search.Children[1].Value != int64(ldap.ScopeWholeSubtree) {
+				return errors.New("unexpected subtree request")
+			}
+			if err := sendWire(c, wireEntry(id, entry)); err != nil {
+				return err
+			}
+			if err := sendWire(c, wireResult(id, 5, ldap.LDAPResultSuccess)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	cfg := fixtureConfig()
+	cfg.URL = "ldaps://" + server.listener.Addr().String()
+	cfg.RootCAs = roots
+	cfg.SearchMode = "unpaged"
+	cfg.Mapping = &m
+	r, err := New(cfg, fixtureReader(t).credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := r.Collect(t.Context())
+	if err != nil || !snapshot.Complete || len(snapshot.Devices) != 1 || !snapshot.Devices[0].Active ||
+		snapshot.Devices[0].ID != "008002ff" || len(snapshot.Devices[0].GroupIDs) != 1 || snapshot.Devices[0].GroupIDs[0] != "008001ff" {
+		t.Fatalf("LDAP binary identity round-trip failed: %v", err)
+	}
+}

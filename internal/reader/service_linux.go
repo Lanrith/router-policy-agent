@@ -31,7 +31,7 @@ func Run(ctx context.Context, configDirectory string, diagnostics io.Writer) err
 // single-page and multi-page stages, or an applied zero-grant receipt for withdrawn.
 func CheckProvider(ctx context.Context, configDirectory string, output io.Writer, stage string) error {
 	switch stage {
-	case "single-page", "multi-page", "withdrawn":
+	case "single-page", "multi-page", "withdrawn", "unpaged", "unpaged-withdrawn":
 		return run(ctx, configDirectory, output, stage)
 	default:
 		return errRuntime
@@ -70,9 +70,12 @@ func run(ctx context.Context, configDirectory string, diagnostics io.Writer, sta
 	}
 	if stage != "" {
 		collect := func(ctx context.Context) (policy.DirectorySnapshot, error) {
+			if stage == "unpaged" || stage == "unpaged-withdrawn" {
+				return collector.CheckUnpaged(ctx)
+			}
 			return collector.CheckProvider(ctx, stage != "single-page")
 		}
-		return checkProviderReceipt(ctx, collect, submit, diagnostics, stage == "withdrawn")
+		return checkProviderReceipt(ctx, collect, submit, diagnostics, stage == "withdrawn" || stage == "unpaged-withdrawn")
 	}
 	if err := runLoop(ctx, collector.Collect, submit, diagnostics); err != nil {
 		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
@@ -110,7 +113,11 @@ func loadReader(ctx context.Context, root *os.Root, owner uint32) (*directory.Re
 	}
 	options := directory.Config{
 		URL: configuration.DirectoryURL, BaseDN: configuration.BaseDN,
+		Mapping: configuration.Mapping,
 		Timeout: collectionTimeout, PageSize: 256, MaximumDevices: 4096, MaximumGroups: 8192,
+	}
+	if configuration.SearchMode != nil {
+		options.SearchMode = *configuration.SearchMode
 	}
 	if configuration.PlaintextUntil != "" {
 		options.PlaintextUntil, err = time.Parse(time.RFC3339Nano, configuration.PlaintextUntil)

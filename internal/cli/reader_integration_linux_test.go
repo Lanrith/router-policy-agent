@@ -110,7 +110,7 @@ func TestConfiguredNonRootReaderUsesLDAPSAndAuthenticatedIPC(t *testing.T) {
 			})
 			configuration, err := json.Marshal(map[string]any{
 				"schema_version": 1, "directory_url": "ldaps://" + ldapListener.Addr().String(),
-				"base_dn": "dc=example,dc=test", "helper_socket": socket, "custom_ca": mode != "untrusted tls",
+				"base_dn": "dc=example,dc=test", "search_mode": "paged", "helper_socket": socket, "custom_ca": mode != "untrusted tls",
 			})
 			if err != nil {
 				t.Fatal("reader fixture configuration encoding failed")

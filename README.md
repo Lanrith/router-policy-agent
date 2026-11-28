@@ -12,8 +12,8 @@ Router-side policy compilation for directory-managed devices. One placement grou
 
 **Development status:** the compiler, offline checker, UID-checked local transport, durable revocation state, helper transaction engine and restricted nftables update primitives are implemented. A private guarded backend combines pinned profile inspection, the cooperative writer fence, original authorization deadlines and atomic lease replacement/sealing. A single-use service pairs that backend with the durable engine and IPC, restoring deny-only history before accepting requests and sealing on exit. Isolated kernel tests exercise native IPv4/IPv6 permits, failure revocation and expiry during continuous traffic; a separate fixture tests the service through a real non-root client. The durable revoke-before-update coordinator is also tested. This is not yet a deployable firewall agent. Installed helper activation, directory-source integration, independently qualified bindings, release/pin provenance and independently qualified protected-policy projection, actual owning-writer integration and boot restoration, protected packet-path integration and translation tests remain required. See [the implementation gates](docs/architecture.md#implementation-gates).
 
-A read-only directory collector obtains original Authentik group entries and
-direct device memberships with verified certificates, bounded paging and
+A read-only directory collector obtains original LDAP group entries and
+direct device memberships with verified certificates, bounded LDAP searches and
 redacted failures. Loopback wire tests exercise TLS rejection, partial-result
 rejection, cancellation and credential rotation. The Linux `router-policy-reader`
 command now connects fresh collection to the checked root-helper socket, with a
@@ -141,7 +141,7 @@ The group-only `network_policy_v1` attribute carries a JSON string. Policy uses 
 
 Version 1 accepts TCP/UDP with explicit destination ports and canonical `/32` or `/128` hosts. It rejects duplicate or unknown keys, subnet peers, names, mapped IPv6 addresses, multicast, loopback, link-local and documentation addresses. A temporary group sets `temporary: true` and supplies UTC `expires_at` on every rule. Its seven-day maximum starts at first validation and cannot slide through refresh or restart.
 
-Only Untrusted access groups are supported. Authentik cannot grant either direction of a Security flow, including through NAT aliases. Guest and Assessment isolation, protected administration/service endpoints, retained blocks and router DNS/NTP policy remain independent restrictions. The router owns the baseline; directory attributes cannot modify its hooks, paths, quotas, translators or lifecycle. Application authentication and other network policies still apply.
+Only Untrusted access groups are supported. Directory groups cannot grant either direction of a Security flow, including through NAT aliases. Guest and Assessment isolation, protected administration/service endpoints, retained blocks and router DNS/NTP policy remain independent restrictions. The router owns the baseline; directory attributes cannot modify its hooks, paths, quotas, translators or lifecycle. Application authentication and other network policies still apply.
 
 Recognized NAT64/NAT46 addresses resolve to the real host before protection checks. The compiler includes installed, eligible NAT64 encodings and ready approved NAT46 counterparts. Private targets never gain a well-known-prefix encoding. Reserved unready/unmapped aliases deny, and a changed alias cannot transfer an unchanged rule's permission to another host. Expansion does not create a map, route, listener or DNS record. A compiled representation alone is not proof that its translated packet path can be enforced.
 

@@ -51,7 +51,7 @@ func TestNewRejectsUnsafeConfiguration(t *testing.T) {
 
 func TestCredentialsAreScopedAndNotSerialized(t *testing.T) {
 	valid := Credentials{BindDN: "cn=reader,ou=users," + fixtureBase, Password: "synthetic-test-only"}
-	if !validCredentials(valid, fixtureBase) {
+	if !validCredentials(valid, fixtureBase, false) {
 		t.Fatal("valid scoped credentials rejected")
 	}
 	for _, credentials := range []Credentials{
@@ -59,7 +59,7 @@ func TestCredentialsAreScopedAndNotSerialized(t *testing.T) {
 		{BindDN: "cn=reader,ou=nested,ou=users," + fixtureBase, Password: valid.Password},
 		{BindDN: valid.BindDN, Password: strings.Repeat("x", 4097)},
 	} {
-		if validCredentials(credentials, fixtureBase) {
+		if validCredentials(credentials, fixtureBase, false) {
 			t.Fatal("unscoped credentials accepted")
 		}
 	}

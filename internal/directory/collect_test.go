@@ -31,7 +31,7 @@ func (f searchFunc) Search(request *ldap.SearchRequest) (*ldap.SearchResult, err
 
 func fixtureConfig() Config {
 	return Config{URL: "ldaps://ldap.example.test:636", BaseDN: fixtureBase,
-		Timeout: time.Second, PageSize: 2, MaximumDevices: 16, MaximumGroups: 16}
+		SearchMode: "paged", Timeout: time.Second, PageSize: 2, MaximumDevices: 16, MaximumGroups: 16}
 }
 
 func fixtureReader(t *testing.T) *Reader {
@@ -283,7 +283,7 @@ func TestPagingIsCompleteCriticalAndBounded(t *testing.T) {
 		}
 		return completeResponse(nil), nil
 	})
-	entries, err := reader.pages(t.Context(), client, "groups", 16)
+	entries, err := reader.search(t.Context(), client, "groups", 16, true)
 	if err != nil || len(entries) != 1 || calls != 2 {
 		t.Fatalf("paging: %d entries, %d calls, %v", len(entries), calls, err)
 	}
@@ -319,7 +319,7 @@ func TestPagingIsCompleteCriticalAndBounded(t *testing.T) {
 				}
 				return response, nil
 			})
-			entries, err := reader.pages(t.Context(), client, "groups", 16)
+			entries, err := reader.search(t.Context(), client, "groups", 16, true)
 			if !errors.Is(err, ErrRead) || entries != nil || strings.Contains(err.Error(), "private diagnostic") {
 				t.Fatalf("partial paging escaped: %d, %v", len(entries), err)
 			}
@@ -363,7 +363,7 @@ func TestProviderQualificationRequiresObservedPageShape(t *testing.T) {
 				return &ldap.SearchResult{Entries: entries, Controls: []ldap.Control{paging}}, nil
 			})
 
-			entries, err := r.pages(t.Context(), client, "users", 16)
+			entries, err := r.search(t.Context(), client, "users", 16, true)
 			if (err == nil) != test.pass || err != nil && entries != nil {
 				t.Fatal("unexpected page qualification result")
 			}
@@ -385,5 +385,27 @@ func TestEmptyDirectoryAndCancelledCollection(t *testing.T) {
 	}), fixtureTime)
 	if !errors.Is(err, ErrRead) || snapshot.Complete {
 		t.Fatal("cancelled collection accepted")
+	}
+}
+
+func TestAuthentikLDAPBoolean(t *testing.T) {
+	for _, test := range []struct {
+		value  string
+		active bool
+	}{
+		{"TRUE", true}, {"FALSE", false}, {"true", true}, {"false", false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			groups, users := fixtureEntries()
+			attribute(users[0], "ak-active").Values = []string{test.value}
+			extra := ldap.NewEntry("cn=authentik Admins,ou=groups,"+fixtureBase, map[string][]string{
+				"objectClass": {"goauthentik.io/ldap/group"}, "cn": {"authentik Admins"}, "uid": {"admins-uuid"},
+			})
+			groups = append(groups, extra)
+			got, err := fixtureReader(t).collect(t.Context(), fixtureSearch(t, groups, users), fixtureTime)
+			if err != nil || len(got.Devices) != 1 || got.Devices[0].Active != test.active {
+				t.Fatalf("boolean mismatch: %v", err)
+			}
+		})
 	}
 }

@@ -23,17 +23,19 @@ const maximumCredentials = 8 << 10
 const maximumCA = 64 << 10
 
 type config struct {
-	SchemaVersion  int    `json:"schema_version"`
-	DirectoryURL   string `json:"directory_url"`
-	BaseDN         string `json:"base_dn"`
-	HelperSocket   string `json:"helper_socket"`
-	CustomCA       bool   `json:"custom_ca"`
-	PlaintextUntil string `json:"plaintext_until,omitempty"`
+	SchemaVersion  int                `json:"schema_version"`
+	DirectoryURL   string             `json:"directory_url"`
+	BaseDN         string             `json:"base_dn"`
+	SearchMode     *string            `json:"search_mode,omitempty"`
+	Mapping        *directory.Mapping `json:"mapping,omitempty"`
+	HelperSocket   string             `json:"helper_socket"`
+	CustomCA       bool               `json:"custom_ca"`
+	PlaintextUntil string             `json:"plaintext_until,omitempty"`
 }
 
 func decodeConfig(data []byte) (config, error) {
 	keys := []string{"schema_version", "directory_url", "base_dn", "helper_socket", "custom_ca"}
-	if err := strictjson.Object(data, keys, []string{"plaintext_until"}, maximumConfig); err != nil {
+	if err := strictjson.Object(data, keys, []string{"plaintext_until", "search_mode", "mapping"}, maximumConfig); err != nil {
 		return config{}, errRuntime
 	}
 	var parsed config
@@ -42,6 +44,13 @@ func decodeConfig(data []byte) (config, error) {
 	}
 	if parsed.SchemaVersion != 1 || !privatePath(parsed.HelperSocket, 107) {
 		return config{}, errRuntime
+	}
+	if parsed.SearchMode != nil {
+		switch *parsed.SearchMode {
+		case "auto", "paged", "unpaged":
+		default:
+			return config{}, errRuntime
+		}
 	}
 	if parsed.PlaintextUntil != "" {
 		if _, err := time.Parse(time.RFC3339Nano, parsed.PlaintextUntil); err != nil ||
